@@ -3,18 +3,38 @@
 # Usage: see README.md in this folder.
 
 services:
+  # One-shot helper. The broker runs as uid/gid 1883 inside its container and refuses to start if it cannot
+  # read its password file or private key. Files on the VM belong to the login user, so this tiny root
+  # container copies them into a named volume with the right owner and modes on every `docker compose up`.
+  # Nothing on the host has to be chown-ed by hand, and `git pull` never fights over file ownership.
+  mosquitto-init:
+    image: alpine:3.22
+    restart: "no"
+    volumes:
+      - ./mosquitto:/src/mosquitto:ro
+      - ./certs:/src/certs:ro
+      - mosquitto-config:/dst
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        cp /src/mosquitto/mosquitto.conf /src/mosquitto/passwd /src/mosquitto/acl /dst/
+        cp /src/certs/ca.crt /src/certs/server.crt /src/certs/server.key /dst/
+        chown 1883:1883 /dst/*
+        chmod 644 /dst/mosquitto.conf /dst/ca.crt /dst/server.crt
+        chmod 600 /dst/passwd /dst/acl /dst/server.key
+
   mosquitto:
     image: eclipse-mosquitto:2
     restart: unless-stopped
+    depends_on:
+      mosquitto-init:
+        condition: service_completed_successfully
     ports:
       - "8883:8883" # MQTT over TLS, the only port exposed to the internet
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
-      - ./mosquitto/acl:/mosquitto/config/acl:ro
-      - ./certs/ca.crt:/mosquitto/certs/ca.crt:ro
-      - ./certs/server.crt:/mosquitto/certs/server.crt:ro
-      - ./certs/server.key:/mosquitto/certs/server.key:ro
+      - mosquitto-config:/mosquitto/config:ro
       - mosquitto-data:/mosquitto/data
     logging:
       driver: json-file
@@ -49,4 +69,5 @@ services:
         max-file: "3"
 
 volumes:
+  mosquitto-config:
   mosquitto-data:

@@ -1,14 +1,14 @@
-# Запуск в Google Cloud (e2-micro, Always Free)
+# Running on Google Cloud (e2-micro, Always Free)
 
-Схема: ESP32 → `mqtts://<IP>:8883` (Mosquitto, TLS + логин/пароль) → Go-сервис → Telegram-бот.
-На одной маленькой VM: брокер + сервис. Prometheus/Grafana не ставим (1 ГБ RAM), метрики доступны на `127.0.0.1:2112` самой VM.
+Layout: ESP32 → `mqtts://<IP>:8883` (Mosquitto, TLS + username/password) → Go service → Telegram bot.
+One small VM runs the broker and the service. Prometheus/Grafana are not deployed (1 GB RAM); metrics are available on `127.0.0.1:2112` of the VM itself.
 
-> Бесплатный уровень: одна e2-micro в `us-central1`, `us-west1` или `us-east1`, до 30 ГБ стандартного диска.
-> Перед созданием проверьте в калькуляторе цен Google, не тарифицируется ли внешний IPv4 отдельно.
+> Free tier: one e2-micro in `us-central1`, `us-west1` or `us-east1`, up to 30 GB of standard disk.
+> Check Google's pricing calculator first: the external IPv4 address may be billed separately.
 
-## 1. Создать VM и открыть порт
+## 1. Create the VM and open the port
 
-Нужны аккаунт Google Cloud с биллингом и установленный `gcloud` (`gcloud auth login`, `gcloud config set project <ID>`).
+Requires a Google Cloud account with billing and `gcloud` (`gcloud auth login`, `gcloud config set project <ID>`).
 
 ```bash
 gcloud compute instances create climate-vm \
@@ -19,64 +19,59 @@ gcloud compute instances create climate-vm \
 
 gcloud compute firewall-rules create allow-mqtts --allow=tcp:8883 --target-tags=mqtt
 
-# внешний IP машины
+# external IP of the VM
 gcloud compute instances describe climate-vm --zone=us-central1-a \
   --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
 ```
 
-Если IP после перезапуска VM изменится, достаточно перевыпустить сертификат и обновить адрес в прошивке.
+If the IP changes (for example after a VM restart without a reserved address), re-issue the certificate and update the address in the firmware. Reserving a static address avoids this.
 
-## 2. Подготовить VM
+## 2. Prepare the VM
 
 ```bash
 gcloud compute ssh climate-vm --zone=us-central1-a
 ```
 
-На VM (swap нужен, на 1 ГБ сборка Go иначе может не поместиться):
+On the VM (swap is needed: building Go on 1 GB of RAM can run out of memory otherwise):
 
 ```bash
 sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER   # затем выйдите и зайдите по ssh снова
+sudo usermod -aG docker $USER   # then log out and ssh in again
 ```
 
-## 3. Залить проект
+## 3. Get the project
 
-С ноутбука, из папки проекта:
+On the VM:
 
 ```bash
-tar --exclude=.idea --exclude='_backup_before_claude_*' --exclude=.git -czf /tmp/climate.tgz .
-gcloud compute scp /tmp/climate.tgz climate-vm:~ --zone=us-central1-a
+git clone https://github.com/Nurs717/climate-processor.git
+cd climate-processor/deploy/gcp
 ```
 
-На VM:
+Updating later is `git pull` followed by `docker compose up -d --build`.
+
+## 4. Generate certificates and passwords
 
 ```bash
-mkdir -p ~/climate && tar -xzf ~/climate.tgz -C ~/climate
-cd ~/climate/deploy/gcp
+bash ./scripts/gen-secrets.sh <VM-external-IP>
 ```
 
-## 4. Сгенерировать сертификаты и пароли
+The script prints the ESP32 username and password once. Write them down. Then:
 
 ```bash
-bash ./scripts/gen-secrets.sh <внешний-IP-VM>
+nano .env      # set TELEGRAM_BOT_TOKEN (a token from @BotFather)
 ```
 
-Скрипт один раз покажет логин и пароль для ESP32. Запишите их. Затем:
+Download `certs/ca.crt` to your laptop (the firmware needs it), then move `certs/ca.key` off the VM to a safe place and delete it from the VM:
 
 ```bash
-nano .env      # впишите TELEGRAM_BOT_TOKEN (новый токен от @BotFather)
+gcloud compute scp climate-vm:~/climate-processor/deploy/gcp/certs/ca.crt . --zone=us-central1-a
 ```
 
-Скачайте `certs/ca.crt` на ноутбук (он нужен прошивке), а `certs/ca.key` перенесите с VM в надёжное место и удалите с VM:
-
-```bash
-gcloud compute scp climate-vm:~/climate/deploy/gcp/certs/ca.crt . --zone=us-central1-a
-```
-
-## 5. Запустить
+## 5. Start
 
 ```bash
 docker compose up -d --build
@@ -84,22 +79,25 @@ docker compose ps
 docker compose logs -f climate-app
 ```
 
-В логах должно быть `Successfully connected to the MQTT broker` и `Successfully subscribed`.
-Напишите боту `/start`: он покажет ваш chat ID. Добавьте его в `TELEGRAM_ALLOWED_CHAT_IDS` в `.env` и перезапустите: `docker compose up -d`.
+The logs should contain `Successfully connected to the MQTT broker` and `Successfully subscribed`.
 
-## 6. Проверка без железа
+File ownership needs no manual work: the broker runs as uid 1883 inside its container, and the one-shot `mosquitto-init` service in `docker-compose.yml` copies the config, password file, ACL and keys into a volume with the right owner and modes on every `docker compose up`. After changing `mosquitto/acl` or `mosquitto/passwd`, run `docker compose up -d` and then `docker compose restart mosquitto`.
 
-С ноутбука (нужен `mosquitto-clients`) отправьте тестовое показание:
+Message the bot `/start`: it shows your chat ID. Add it to `TELEGRAM_ALLOWED_CHAT_IDS` in `.env` and apply with `docker compose up -d`.
+
+## 6. Check without hardware
+
+From your laptop (needs `mosquitto-clients`) publish a test reading:
 
 ```bash
-mosquitto_pub -h <IP> -p 8883 --cafile ca.crt -u esp32 -P '<пароль ESP32>' \
+mosquitto_pub -h <IP> -p 8883 --cafile ca.crt -u esp32 -P '<ESP32 password>' \
   -t home/room/climate -m '{"temperature":21.5,"humidity":45,"pressure":101325}'
 ```
 
-Затем `/status` в боте должен показать значения. Если сообщения нет 5 минут, бот сам пришлёт предупреждение
-(и ещё одно, когда данные снова пойдут). Порог меняется переменной `STALE_AFTER`.
+`/status` in the bot should now show the values. If no message arrives for 5 minutes, the bot sends a warning
+(and one more when data resumes). The threshold is set by `STALE_AFTER`.
 
-## 7. Прошивка ESP32
+## 7. ESP32 firmware
 
-Нужно поменять в прошивке: адрес брокера на `mqtts://<IP>:8883`, добавить логин `esp32` и пароль, встроить `ca.crt`
-для проверки сертификата, а Wi-Fi и пароли вынести из исходников в конфиг, который не попадает в git.
+The firmware needs: broker address `mqtts://<IP>:8883`, username `esp32` and its password, the embedded `ca.crt`
+for certificate verification, and Wi-Fi/MQTT secrets moved out of the sources into a config file that is not committed to git.
