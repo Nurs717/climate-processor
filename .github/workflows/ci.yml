@@ -41,7 +41,7 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.9
+          version: latest
 
   docker:
     name: Docker build
