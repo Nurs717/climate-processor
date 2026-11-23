@@ -32,7 +32,7 @@ func main() {
 		loc = time.UTC
 	}
 
-	// Cancelled on Ctrl+C / SIGTERM (docker stop)
+	// Canceled on Ctrl+C / SIGTERM (docker stop)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -66,20 +66,16 @@ func main() {
 	notify := func(string) {}
 	if tgHandler := handler.NewTGHandler(cfg.TGToken, cfg.AllowedChatIDs, climateService); tgHandler != nil {
 		notify = tgHandler.Notify
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			tgHandler.Start(ctx)
-		}()
+		})
 		log.Println("[INFO] Telegram bot worker started successfully in the background.")
 	}
 
 	// Alert (in Telegram) when the sensor goes silent and when it comes back
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		climateService.WatchStaleness(ctx, 30*time.Second, notify)
-	}()
+	})
 
 	// === 3. START THE HTTP SERVER (Prometheus metrics + health check) ===
 	mux := http.NewServeMux()
