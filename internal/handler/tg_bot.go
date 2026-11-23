@@ -96,7 +96,7 @@ func (h *TGHandler) handle(update tgbotapi.Update) {
 
 	chatID := msg.Chat.ID
 	if _, ok := h.allowed[chatID]; !ok {
-		h.send(chatID, fmt.Sprintf("⛔ Access denied.\nYour chat ID: `%d`\nAsk the owner to add it to TELEGRAM_ALLOWED_CHAT_IDS.", chatID), "Markdown")
+		h.send(chatID, fmt.Sprintf("⛔ Access denied.\nYour chat ID: %d\nAsk the owner to add it to TELEGRAM_ALLOWED_CHAT_IDS.", chatID), "")
 		return
 	}
 
