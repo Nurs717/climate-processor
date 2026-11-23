@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s # How often to scrape metrics (the board sends data every 5 sec)
+
+scrape_configs:
+  - job_name: 'go-climate-processor'
+    static_configs:
+      - targets: ['192.168.49.2:31331'] # Replace with your IP if it has changed

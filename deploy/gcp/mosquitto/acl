@@ -1,0 +1,6 @@
+# The sensor may only publish its topic; the Go service may only read it.
+user esp32
+topic write home/room/climate
+
+user climate
+topic read home/room/climate

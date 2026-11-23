@@ -1,0 +1,11 @@
+.git
+.idea
+_backup_before_claude_*
+deploy
+k8s-*
+k8s-cloud
+*.md
+*.yml
+*.yaml
+.env
+*.key

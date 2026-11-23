@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: climate-processor-deployment
+  labels:
+    app: climate-processor
+spec:
+  replicas: 1 # Number of replicas of our service
+  selector:
+    matchLabels:
+      app: climate-processor
+  template:
+    metadata:
+      labels:
+        app: climate-processor
+    spec:
+      containers:
+        - name: climate-processor
+          image: climate-processor:v1
+          imagePullPolicy: Never # Tell K8s to use the local image instead of pulling from Docker Hub
+          ports:
+            - containerPort: 2112 # Port for Prometheus metrics
+          env:
+            - name: MQTT_BROKER_URL
+              value: "tcp://192.168.0.206:1883" # Our Mosquitto running in Docker on the host
+            - name: METRICS_PORT
+              value: ":2112"

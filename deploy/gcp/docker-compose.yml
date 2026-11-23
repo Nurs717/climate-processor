@@ -1,0 +1,52 @@
+# Cloud stack for a Google Cloud e2-micro VM (1 GB RAM): MQTT broker (TLS + passwords) + Go service.
+# Prometheus/Grafana are intentionally not here - they do not fit into 1 GB.
+# Usage: see README.md in this folder.
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "8883:8883" # MQTT over TLS, the only port exposed to the internet
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./mosquitto/acl:/mosquitto/config/acl:ro
+      - ./certs/ca.crt:/mosquitto/certs/ca.crt:ro
+      - ./certs/server.crt:/mosquitto/certs/server.crt:ro
+      - ./certs/server.key:/mosquitto/certs/server.key:ro
+      - mosquitto-data:/mosquitto/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  climate-app:
+    build:
+      context: ../.. # project root
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      MQTT_BROKER_URL: ssl://mosquitto:8883
+      MQTT_USERNAME: climate
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?set MQTT_PASSWORD in .env}
+      MQTT_CA_FILE: /certs/ca.crt
+      MQTT_TLS_SERVER_NAME: mqtt.climate.local # must match the certificate SAN (see scripts/gen-secrets.sh)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
+      TIMEZONE: Asia/Almaty
+      STALE_AFTER: 5m
+    volumes:
+      - ./certs/ca.crt:/certs/ca.crt:ro
+    ports:
+      - "127.0.0.1:2112:2112" # metrics/healthz only on the VM itself (reach it via an SSH tunnel)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mosquitto-data:

@@ -1,0 +1,11 @@
+.idea/
+_backup_before_claude_*/
+
+# secrets - never commit
+.env
+*.key
+deploy/gcp/certs/
+deploy/gcp/mosquitto/passwd
+
+# old AWS/EKS manifests with a plaintext token; will return as a GKE version using Secrets
+k8s-cloud/
