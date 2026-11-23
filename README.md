@@ -1,4 +1,5 @@
 # climate-processor
+[![CI](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml)
 
 A small Go service that turns room climate readings from an ESP32 + BME280 sensor into Prometheus metrics and answers questions about them in a Telegram bot.
 
