@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s # the sensor sends a reading every few seconds
+
+scrape_configs:
+  - job_name: climate-processor
+    static_configs:
+      - targets: ["climate-app:2112"] # service name inside the compose network

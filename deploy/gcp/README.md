@@ -3,101 +3,149 @@
 Layout: ESP32 → `mqtts://<IP>:8883` (Mosquitto, TLS + username/password) → Go service → Telegram bot.
 One small VM runs the broker and the service. Prometheus/Grafana are not deployed (1 GB RAM); metrics are available on `127.0.0.1:2112` of the VM itself.
 
+> This page is about the cloud deployment. To run everything locally with one command (no cloud needed), see the [Quick start in the root README](../../README.md#quick-start-local-one-command).
+
 > Free tier: one e2-micro in `us-central1`, `us-west1` or `us-east1`, up to 30 GB of standard disk.
-> Check Google's pricing calculator first: the external IPv4 address may be billed separately.
+> The external IPv4 address is billed separately (a few dollars a month), so set a budget alert.
 
-## 1. Create the VM and open the port
+## How deployment works
 
-Requires a Google Cloud account with billing and `gcloud` (`gcloud auth login`, `gcloud config set project <ID>`).
+```
+git push to main → CI (tests, lint, vulncheck) → CD workflow:
+  1. builds the Docker image and pushes it to Artifact Registry (tag = git commit SHA)
+  2. opens an SSH session to the VM through an IAP tunnel (port 22 is closed to the internet)
+  3. ships this folder to /opt/climate and runs scripts/deploy.sh there
+  4. deploy.sh pulls the image, restarts the service and waits until it is healthy
+```
+
+- GitHub authenticates to Google with **Workload Identity Federation**: no JSON keys anywhere. Only runs of this repository on `main` can use the `github-deployer` service account.
+- Everything the pipeline needs is configured as GitHub **Variables** (not secrets): `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`.
+- On the VM the stack lives in `/opt/climate` (owned by root). The pipeline replaces the files that are in git; the secrets that are not in git (`.env`, `certs/`, `mosquitto/passwd`) are never touched.
+- Rollback: re-run the CD workflow of an older commit in the Actions tab.
+
+## One-time setup
+
+Run these in Cloud Shell (or any shell with `gcloud`). Replace the placeholders.
+
+### 1. VM and network
 
 ```bash
 gcloud compute instances create climate-vm \
   --zone=us-central1-a --machine-type=e2-micro \
   --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
-  --boot-disk-size=30GB --boot-disk-type=pd-standard \
-  --tags=mqtt
+  --boot-disk-size=30GB --boot-disk-type=pd-standard --tags=mqtt
 
+# MQTT over TLS for the sensor; SSH only from Google's IAP range
 gcloud compute firewall-rules create allow-mqtts --allow=tcp:8883 --target-tags=mqtt
-
-# external IP of the VM
-gcloud compute instances describe climate-vm --zone=us-central1-a \
-  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+gcloud compute firewall-rules create allow-iap-ssh --network=default --direction=INGRESS \
+  --action=ALLOW --rules=tcp:22 --source-ranges=35.235.240.0/20
 ```
 
-If the IP changes (for example after a VM restart without a reserved address), re-issue the certificate and update the address in the firmware. Reserving a static address avoids this.
-
-## 2. Prepare the VM
+Reserve a static address for the VM so the broker IP (it is inside the TLS certificate) never changes. From now on SSH always needs the tunnel flag:
 
 ```bash
-gcloud compute ssh climate-vm --zone=us-central1-a
+gcloud compute ssh climate-vm --zone=us-central1-a --tunnel-through-iap
 ```
 
-On the VM (swap is needed: building Go on 1 GB of RAM can run out of memory otherwise):
+On the VM (swap helps a 1 GB machine; Docker is needed):
 
 ```bash
 sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-
 curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER   # then log out and ssh in again
 ```
 
-## 3. Get the project
-
-On the VM:
+### 2. Image registry
 
 ```bash
-git clone https://github.com/Nurs717/climate-processor.git
-cd climate-processor/deploy/gcp
+gcloud services enable artifactregistry.googleapis.com iamcredentials.googleapis.com sts.googleapis.com iap.googleapis.com oslogin.googleapis.com
+gcloud artifacts repositories create climate --repository-format=docker --location=us-central1
+
+# The VM only reads images (its default service account already has the read-only storage scope)
+VM_SA=$(gcloud compute instances describe climate-vm --zone=us-central1-a --format='value(serviceAccounts[0].email)')
+gcloud artifacts repositories add-iam-policy-binding climate --location=us-central1 \
+  --member="serviceAccount:$VM_SA" --role=roles/artifactregistry.reader
 ```
 
-Updating later is `git pull` followed by `docker compose up -d --build`.
+Keep the registry small with a cleanup policy (keep the 5 newest versions, delete the rest), see `gcloud artifacts repositories set-cleanup-policies`.
 
-## 4. Generate certificates and passwords
+### 3. GitHub → Google access (no keys)
 
 ```bash
-bash ./scripts/gen-secrets.sh <VM-external-IP>
+PROJECT_ID=$(gcloud config get-value project)
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+GH_REPO="<owner>/<repo>"
+
+gcloud iam service-accounts create github-deployer --display-name="GitHub Actions deployer"
+gcloud iam workload-identity-pools create github --location=global
+gcloud iam workload-identity-pools providers create-oidc github-oidc \
+  --location=global --workload-identity-pool=github \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
+  --attribute-condition="assertion.repository == '${GH_REPO}' && assertion.ref == 'refs/heads/main'"
+
+DEPLOYER="serviceAccount:github-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
+gcloud iam service-accounts add-iam-policy-binding "${DEPLOYER#serviceAccount:}" \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/${GH_REPO}"
+
+# Least privilege for the deployer: push images, tunnel and log in to this one VM
+gcloud artifacts repositories add-iam-policy-binding climate --location=us-central1 --member="$DEPLOYER" --role=roles/artifactregistry.writer
+gcloud compute instances add-iam-policy-binding climate-vm --zone=us-central1-a --member="$DEPLOYER" --role=roles/compute.osAdminLogin
+gcloud iam service-accounts add-iam-policy-binding "$VM_SA" --member="$DEPLOYER" --role=roles/iam.serviceAccountUser
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="$DEPLOYER" --role=roles/iap.tunnelResourceAccessor
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="$DEPLOYER" --role=roles/compute.viewer
 ```
 
-The script prints the ESP32 username and password once. Write them down. Then:
+Then set the six GitHub Variables listed above (`gh variable set NAME --repo <owner>/<repo> --body VALUE`). `GCP_WIF_PROVIDER` is `projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github/providers/github-oidc`.
+
+### 4. Secrets on the VM
+
+The secrets live only on the VM, in `/opt/climate`, and are never committed. On the VM, once:
 
 ```bash
-nano .env      # set TELEGRAM_BOT_TOKEN (a token from @BotFather)
+git clone https://github.com/<owner>/<repo>.git /tmp/climate-src
+sudo mkdir -p /opt/climate && sudo cp -r /tmp/climate-src/deploy/gcp/. /opt/climate/ && rm -rf /tmp/climate-src
+sudo bash /opt/climate/scripts/gen-secrets.sh <VM-external-IP>
+sudo nano /opt/climate/.env      # set TELEGRAM_BOT_TOKEN (from @BotFather)
 ```
 
-Download `certs/ca.crt` to your laptop (the firmware needs it), then move `certs/ca.key` off the VM to a safe place and delete it from the VM:
+The script prints the ESP32 username and password once: save them in a password manager. Then **move the CA private key off the VM** (it is only needed to issue a new broker certificate) and keep `ca.crt` for the firmware:
 
 ```bash
-gcloud compute scp climate-vm:~/climate-processor/deploy/gcp/certs/ca.crt . --zone=us-central1-a
+sudo cp /opt/climate/certs/ca.crt /opt/climate/certs/ca.key ~ && sudo chown $USER ~/ca.crt ~/ca.key
+# download both (for example with `gcloud compute scp --tunnel-through-iap`), then on the VM:
+sudo shred -u /opt/climate/certs/ca.key && rm ~/ca.key ~/ca.crt
 ```
 
-## 5. Start
+The first push to `main` after this deploys the stack.
+
+## Day-to-day
 
 ```bash
-docker compose up -d --build
-docker compose ps
-docker compose logs -f climate-app
+cd /opt/climate
+sudo docker compose ps
+sudo docker compose logs -f climate-app
 ```
 
-The logs should contain `Successfully connected to the MQTT broker` and `Successfully subscribed`.
+After editing `mosquitto/acl` or `mosquitto/passwd` run `sudo docker compose up -d` and then `sudo docker compose restart mosquitto`.
+File ownership needs no manual work: the one-shot `mosquitto-init` service copies the config, ACL, password file and keys into a volume owned by uid 1883 (the broker user) on every `docker compose up`.
 
-File ownership needs no manual work: the broker runs as uid 1883 inside its container, and the one-shot `mosquitto-init` service in `docker-compose.yml` copies the config, password file, ACL and keys into a volume with the right owner and modes on every `docker compose up`. After changing `mosquitto/acl` or `mosquitto/passwd`, run `docker compose up -d` and then `docker compose restart mosquitto`.
+The broker certificate is valid for 825 days from the day `gen-secrets.sh` ran. To renew it you need the CA key you stored off the VM.
 
-Message the bot `/start`: it shows your chat ID. Add it to `TELEGRAM_ALLOWED_CHAT_IDS` in `.env` and apply with `docker compose up -d`.
+## Check without hardware
 
-## 6. Check without hardware
-
-From your laptop (needs `mosquitto-clients`) publish a test reading:
+From a machine with `mosquitto-clients`, publish a test reading:
 
 ```bash
 mosquitto_pub -h <IP> -p 8883 --cafile ca.crt -u esp32 -P '<ESP32 password>' \
   -t home/room/climate -m '{"temperature":21.5,"humidity":45,"pressure":101325}'
 ```
 
-`/status` in the bot should now show the values. If no message arrives for 5 minutes, the bot sends a warning
+Then `/status` in the bot should show the values. If no message arrives for 5 minutes, the bot sends a warning
 (and one more when data resumes). The threshold is set by `STALE_AFTER`.
 
-## 7. ESP32 firmware
+## ESP32 firmware
 
 The firmware needs: broker address `mqtts://<IP>:8883`, username `esp32` and its password, the embedded `ca.crt`
-for certificate verification, and Wi-Fi/MQTT secrets moved out of the sources into a config file that is not committed to git.
+for certificate verification, and Wi-Fi/MQTT secrets kept out of the sources in a config file that is not committed to git.

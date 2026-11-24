@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generates a private CA, the broker's TLS certificate and the MQTT users/passwords.
 # Run it ON THE VM (needs openssl and docker), from anywhere:
-#   ./scripts/gen-secrets.sh <vm-public-ip>
+#   sudo bash ./scripts/gen-secrets.sh <vm-public-ip>   (in /opt/climate, see README.md)
 set -euo pipefail
 
 HOST_IP="${1:?Usage: $0 <vm-public-ip>}"
@@ -50,7 +50,7 @@ Done.
       user: esp32
       password: $ESP_PASSWORD
   * Copy certs/ca.crt to your laptop - the firmware embeds it to verify the broker.
-  * Edit .env and set TELEGRAM_BOT_TOKEN, then: docker compose up -d --build
+  * Edit .env and set TELEGRAM_BOT_TOKEN. The stack is started by the CD pipeline (push to main).
   * Move certs/ca.key somewhere safe (e.g. your laptop) and delete it from the VM:
     it is only needed to issue a new broker certificate (the current one is valid ~2 years).
 EOF

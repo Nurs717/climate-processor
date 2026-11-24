@@ -1,0 +1,47 @@
+# Local development stack: broker + service + Prometheus + Grafana, nothing to configure.
+# Start it with `make up` from the repository root. Everything listens on localhost only.
+
+name: climate-local
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "127.0.0.1:1883:1883" # plain MQTT for local tests (no TLS, no passwords)
+
+  climate-app:
+    build:
+      context: ../.. # project root
+    depends_on:
+      - mosquitto
+    environment:
+      MQTT_BROKER_URL: tcp://mosquitto:1883
+      # The Telegram bot stays disabled until you create deploy/local/.env (see .env.example).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
+      TIMEZONE: Asia/Almaty
+      STALE_AFTER: 5m
+    ports:
+      - "127.0.0.1:2112:2112" # /metrics and /healthz
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - climate-app
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin # local only: the port is bound to localhost
+    volumes:
+      - ./grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus

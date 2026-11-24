@@ -31,28 +31,29 @@ internal/domain/    payload and reading types
 internal/handler/   MQTT subscriber and Telegram bot
 internal/metrics/   Prometheus metrics
 internal/service/   validation, state, staleness watcher
-deploy/gcp/         Mosquitto (TLS, ACL) + service for a small cloud VM
+deploy/local/       one-command local stack: broker, service, Prometheus, Grafana
+deploy/gcp/         cloud deployment: Mosquitto (TLS, ACL) + service on a small VM, CI/CD setup
+Makefile            everyday commands (run `make` to list them)
 ```
 
-## Run locally
+## Quick start (local, one command)
 
-Requires Go (see `go.mod`) and an MQTT broker reachable at `tcp://127.0.0.1:1883` (or set `MQTT_BROKER_URL`).
+Requires Docker and `make`.
 
 ```bash
-go test ./...
-TELEGRAM_BOT_TOKEN=<token> TELEGRAM_ALLOWED_CHAT_IDS=<your chat id> go run ./cmd/app
+make up        # broker + service + Prometheus + Grafana
+make send      # publish a test reading (make send T=25 H=60)
+make metrics   # see the room_* metrics
+make down
 ```
 
-Send a test reading:
+Prometheus: http://localhost:9090, Grafana: http://localhost:3000 (admin/admin, Prometheus is preconfigured).
+To try the Telegram bot, copy `deploy/local/.env.example` to `deploy/local/.env`, fill it in and run `make up` again.
+Message the bot `/start` to see your chat ID, put it into `TELEGRAM_ALLOWED_CHAT_IDS`, then use `/status`.
 
-```bash
-mosquitto_pub -h 127.0.0.1 -t home/room/climate -m '{"temperature":21.5,"humidity":45,"pressure":101325}'
-curl -s localhost:2112/metrics | grep room_
-```
+Without Docker you need an MQTT broker on `127.0.0.1:1883`; then `make run` starts the service and `make test` runs the tests. Run `make` to list all commands.
 
-Message the bot `/start` to see your chat ID, add it to `TELEGRAM_ALLOWED_CHAT_IDS`, restart, then use `/status`.
-
-`docker-compose.yml` in the repository root starts Prometheus and Grafana for local development (adjust the scrape target in `prometheus.yml` to where the service runs).
+This is the local setup. Running it in the cloud with automatic deployment from GitHub Actions is described in [`deploy/gcp/README.md`](deploy/gcp/README.md).
 
 ## Configuration
 
@@ -88,7 +89,7 @@ Example alert expression: `time() - room_last_update_timestamp_seconds > 300`.
 docker build -t climate-processor .
 ```
 
-A ready-made stack for a small cloud VM (Mosquitto with TLS, password file and per-user ACLs, plus this service) is in [`deploy/gcp`](deploy/gcp/README.md).
+Deploying to the cloud (a small Google Cloud VM with Mosquitto over TLS, password file and per-user ACLs, plus this service, updated automatically by GitHub Actions) is described in [`deploy/gcp/README.md`](deploy/gcp/README.md). This README covers local development.
 
 ## Security notes
 
