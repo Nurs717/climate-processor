@@ -1,0 +1,57 @@
+name: CD
+
+# Runs only after the CI workflow has finished on main.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # lets the job request a GitHub OIDC token for Workload Identity Federation
+
+# Deployments never run in parallel and a running one is never cancelled.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, push and deploy
+    runs-on: ubuntu-latest
+    # Deploy only a green CI run of a push to this repository (not a pull request, not a fork).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    env:
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/climate/climate-app
+      TAG: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # Exactly the commit that CI has just tested.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # No JSON keys: GitHub proves its identity with a short-lived token, Google exchanges it for access.
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Build and push the image
+        run: |
+          gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE:$TAG" .
+          docker push "$IMAGE:$TAG"
+
+      # Ship the deploy bundle (compose file, Mosquitto config, scripts) and run the deploy script on the VM.
+      # SSH goes through an IAP tunnel, so port 22 is never open to the internet.
+      - name: Deploy to the VM
+        run: |
+          tar -C deploy/gcp -czf - . | gcloud compute ssh "${{ vars.GCP_VM_NAME }}" \
+            --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            --command "sudo mkdir -p /opt/climate && sudo tar -xzf - --no-same-owner -C /opt/climate && sudo bash /opt/climate/scripts/deploy.sh '$IMAGE:$TAG'"

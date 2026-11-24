@@ -2,6 +2,9 @@
 # Prometheus/Grafana are intentionally not here - they do not fit into 1 GB.
 # Usage: see README.md in this folder.
 
+# Fixed project name: containers and volumes keep the same names wherever the stack lives.
+name: climate
+
 services:
   # One-shot helper. The broker runs as uid/gid 1883 inside its container and refuses to start if it cannot
   # read its password file or private key. Files on the VM belong to the login user, so this tiny root
@@ -43,8 +46,8 @@ services:
         max-file: "3"
 
   climate-app:
-    build:
-      context: ../.. # project root
+    # The image is built and pushed by the CD pipeline; scripts/deploy.sh writes this variable into .env.
+    image: ${CLIMATE_APP_IMAGE:?set CLIMATE_APP_IMAGE in .env (scripts/deploy.sh does it)}
     restart: unless-stopped
     depends_on:
       - mosquitto
