@@ -20,9 +20,12 @@ services:
       MQTT_BROKER_URL: tcp://mosquitto:1883
       # The Telegram bot stays disabled until you create deploy/local/.env (see .env.example).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
+      TELEGRAM_ADMIN_CHAT_IDS: ${TELEGRAM_ADMIN_CHAT_IDS:-}
+      ACCESS_FILE: /data/access.json
       TIMEZONE: Asia/Almaty
       STALE_AFTER: 5m
+    volumes:
+      - climate-data:/data # users approved in the bot survive `make down` / `make up`
     ports:
       - "127.0.0.1:2112:2112" # /metrics and /healthz
 
@@ -45,3 +48,6 @@ services:
       - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
+
+volumes:
+  climate-data:

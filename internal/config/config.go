@@ -22,8 +22,11 @@ type Config struct {
 	MetricsPort string // listen address of the HTTP server, e.g. ":2112"
 
 	TGToken string
-	// Telegram chat IDs that may read the sensor data. Empty = nobody (the bot only shows the chat ID).
-	AllowedChatIDs []int64
+	// Telegram chat IDs of the administrators: they always have access and approve or remove other users
+	// in the bot. Empty = nobody can approve requests.
+	AdminChatIDs []int64
+	// File where users approved in the bot are stored (JSON). Empty = kept in memory, lost on restart.
+	AccessFile string
 
 	Timezone   string        // IANA name used when formatting time in messages
 	StaleAfter time.Duration // how long without readings until the data is considered stale
@@ -43,8 +46,9 @@ func Load() *Config {
 
 		MetricsPort: getEnv("METRICS_PORT", ":2112"),
 
-		TGToken:        getEnv("TELEGRAM_BOT_TOKEN", ""),
-		AllowedChatIDs: parseChatIDs(getEnv("TELEGRAM_ALLOWED_CHAT_IDS", "")),
+		TGToken:      getEnv("TELEGRAM_BOT_TOKEN", ""),
+		AdminChatIDs: parseChatIDs(getEnv("TELEGRAM_ADMIN_CHAT_IDS", "")),
+		AccessFile:   getEnv("ACCESS_FILE", ""),
 
 		Timezone:   getEnv("TIMEZONE", "Asia/Almaty"),
 		StaleAfter: getEnvDuration("STALE_AFTER", 5*time.Minute),
@@ -72,6 +76,7 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 }
 
 // parseChatIDs parses a comma-separated list of Telegram chat IDs (group IDs are negative).
+// Invalid items are skipped with a warning.
 func parseChatIDs(raw string) []int64 {
 	var ids []int64
 	for _, part := range strings.Split(raw, ",") {
@@ -81,7 +86,7 @@ func parseChatIDs(raw string) []int64 {
 		}
 		id, err := strconv.ParseInt(part, 10, 64)
 		if err != nil {
-			log.Printf("[WARN] Ignoring invalid chat id %q in TELEGRAM_ALLOWED_CHAT_IDS", part)
+			log.Printf("[WARN] Ignoring invalid chat id %q in TELEGRAM_ADMIN_CHAT_IDS", part)
 			continue
 		}
 		ids = append(ids, id)

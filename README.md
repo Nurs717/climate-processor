@@ -18,7 +18,7 @@ The sensor publishes `{"temperature": 21.5, "humidity": 45.2, "pressure": 101325
 - **Reliable MQTT client**: subscribes on every (re)connect, retries until the broker is reachable, optional TLS with a private CA and username/password.
 - **Input validation**: missing fields and values outside the BME280 range are rejected and counted in `climate_messages_rejected_total{reason}`.
 - **Stale-data detection**: if no reading arrives for `STALE_AFTER`, `/status` says so and the bot sends one "sensor is silent" alert, and one more when data resumes.
-- **Telegram bot** with a chat-ID allowlist. Commands: `/start` (shows your chat ID), `/status` (current temperature, humidity, pressure in mmHg, time in the configured timezone).
+- **Telegram bot** with admin-approved access. A new person sends `/start`, the admin gets a message with **Allow / Deny** buttons. Admins also have `/users` (list, remove) and `/remove <chat id>`. Approved users are stored in a file and survive restarts. `/status` shows the temperature, humidity, pressure in mmHg and the time in the configured timezone.
 - **Prometheus metrics** and a `/healthz` endpoint on one HTTP port.
 - **Graceful shutdown** on SIGINT/SIGTERM, HTTP server timeouts, small Alpine-based Docker image that runs as a non-root user and has a healthcheck.
 
@@ -49,7 +49,7 @@ make down
 
 Prometheus: http://localhost:9090, Grafana: http://localhost:3000 (admin/admin, Prometheus is preconfigured).
 To try the Telegram bot, copy `deploy/local/.env.example` to `deploy/local/.env`, fill it in and run `make up` again.
-Message the bot `/start` to see your chat ID, put it into `TELEGRAM_ALLOWED_CHAT_IDS`, then use `/status`.
+Message the bot `/start`: while no admin is configured it shows your chat ID. Put it into `TELEGRAM_ADMIN_CHAT_IDS` and restart; from then on you are the admin and everybody else asks for access with `/start`.
 
 Without Docker you need an MQTT broker on `127.0.0.1:1883`; then `make run` starts the service and `make test` runs the tests. Run `make` to list all commands.
 
@@ -67,7 +67,8 @@ This is the local setup. Running it in the cloud with automatic deployment from 
 | `MQTT_TLS_SERVER_NAME` | empty | Name expected in the broker certificate |
 | `METRICS_PORT` | `:2112` | Listen address for `/metrics` and `/healthz` |
 | `TELEGRAM_BOT_TOKEN` | empty | Bot token from @BotFather (bot disabled if empty) |
-| `TELEGRAM_ALLOWED_CHAT_IDS` | empty | Comma-separated chat IDs allowed to read data |
+| `TELEGRAM_ADMIN_CHAT_IDS` | empty | Comma-separated chat IDs of the administrators (always have access, approve and remove users) |
+| `ACCESS_FILE` | empty | JSON file with the users approved in the bot (empty = kept in memory only). The Docker setups use `/data/access.json` on a volume |
 | `TIMEZONE` | `Asia/Almaty` | IANA timezone for displayed time |
 | `STALE_AFTER` | `5m` | Silence duration after which data is considered stale |
 

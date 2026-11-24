@@ -133,6 +133,15 @@ File ownership needs no manual work: the one-shot `mosquitto-init` service copie
 
 The broker certificate is valid for 825 days from the day `gen-secrets.sh` ran. To renew it you need the CA key you stored off the VM.
 
+## Who may use the bot
+
+Admins are set in `TELEGRAM_ADMIN_CHAT_IDS` in `/opt/climate/.env`. Everybody else sends `/start` to the bot and an admin
+approves or declines the request with a button. Approved users are stored in `/data/access.json` (the `climate-data` volume),
+so they survive deployments. Admins manage the list in the bot with `/users` and `/remove <chat id>`, no SSH needed.
+
+To make yourself the first admin, send `/start` to the bot while the variable is empty: it replies with your chat ID.
+Put it into `.env` and run `sudo docker compose up -d`. (Older setups used `TELEGRAM_ALLOWED_CHAT_IDS`; it is no longer read.)
+
 ## Check without hardware
 
 From a machine with `mosquitto-clients`, publish a test reading:

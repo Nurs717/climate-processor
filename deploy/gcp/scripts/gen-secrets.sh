@@ -40,7 +40,7 @@ docker run --rm -v "$PWD/mosquitto:/work" eclipse-mosquitto:2 sh -c \
 cat > .env <<EOF
 MQTT_PASSWORD=$APP_PASSWORD
 TELEGRAM_BOT_TOKEN=
-TELEGRAM_ALLOWED_CHAT_IDS=
+TELEGRAM_ADMIN_CHAT_IDS=
 EOF
 
 cat <<EOF

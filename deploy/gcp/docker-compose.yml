@@ -58,11 +58,13 @@ services:
       MQTT_CA_FILE: /certs/ca.crt
       MQTT_TLS_SERVER_NAME: mqtt.climate.local # must match the certificate SAN (see scripts/gen-secrets.sh)
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
+      TELEGRAM_ADMIN_CHAT_IDS: ${TELEGRAM_ADMIN_CHAT_IDS:-}
+      ACCESS_FILE: /data/access.json # users approved in the bot; the volume keeps them across deployments
       TIMEZONE: Asia/Almaty
       STALE_AFTER: 5m
     volumes:
       - ./certs/ca.crt:/certs/ca.crt:ro
+      - climate-data:/data
     ports:
       - "127.0.0.1:2112:2112" # metrics/healthz only on the VM itself (reach it via an SSH tunnel)
     logging:
@@ -74,3 +76,4 @@ services:
 volumes:
   mosquitto-config:
   mosquitto-data:
+  climate-data:

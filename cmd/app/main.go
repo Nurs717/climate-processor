@@ -11,6 +11,7 @@ import (
 	"time"
 	_ "time/tzdata" // embed the timezone database: the alpine runtime image has none
 
+	"climate-processor/internal/access"
 	"climate-processor/internal/config"
 	"climate-processor/internal/handler"
 	"climate-processor/internal/metrics"
@@ -62,9 +63,18 @@ func main() {
 
 	var wg sync.WaitGroup
 
+	// Who may read the data: admins from the config plus users approved in the bot (kept in ACCESS_FILE).
+	accessStore, err := access.NewStore(cfg.AccessFile, cfg.AdminChatIDs)
+	if err != nil {
+		log.Fatalf("[FATAL] Access list error: %v", err)
+	}
+	if cfg.AccessFile == "" {
+		log.Println("[WARN] ACCESS_FILE is not set: users approved in the bot are lost on restart.")
+	}
+
 	// Initialize and start the Telegram bot in a goroutine
 	notify := func(string) {}
-	if tgHandler := handler.NewTGHandler(cfg.TGToken, cfg.AllowedChatIDs, climateService); tgHandler != nil {
+	if tgHandler := handler.NewTGHandler(cfg.TGToken, accessStore, climateService); tgHandler != nil {
 		notify = tgHandler.Notify
 		wg.Go(func() {
 			tgHandler.Start(ctx)

@@ -17,6 +17,10 @@ FROM alpine:3.22
 # Run as an unprivileged user
 RUN addgroup -S app && adduser -S -G app app
 
+# Directory for the list of approved Telegram users (ACCESS_FILE). A named volume mounted here inherits
+# this owner, so the unprivileged user can write to it.
+RUN mkdir /data && chown app:app /data
+
 WORKDIR /app
 
 # Copy the compiled binary from the previous stage

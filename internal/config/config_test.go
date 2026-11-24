@@ -26,6 +26,31 @@ func TestParseChatIDs(t *testing.T) {
 	}
 }
 
+func TestLoadTelegramAccessSettings(t *testing.T) {
+	t.Setenv("TELEGRAM_ADMIN_CHAT_IDS", "398427165, 111")
+	t.Setenv("ACCESS_FILE", "/data/access.json")
+
+	cfg := Load()
+
+	if want := []int64{398427165, 111}; !slices.Equal(cfg.AdminChatIDs, want) {
+		t.Errorf("AdminChatIDs = %v, want %v", cfg.AdminChatIDs, want)
+	}
+	if cfg.AccessFile != "/data/access.json" {
+		t.Errorf("AccessFile = %q", cfg.AccessFile)
+	}
+}
+
+func TestLoadTelegramAccessDefaults(t *testing.T) {
+	t.Setenv("TELEGRAM_ADMIN_CHAT_IDS", "")
+	t.Setenv("ACCESS_FILE", "")
+
+	cfg := Load()
+
+	if len(cfg.AdminChatIDs) != 0 || cfg.AccessFile != "" {
+		t.Errorf("defaults = %v, %q", cfg.AdminChatIDs, cfg.AccessFile)
+	}
+}
+
 func TestGetEnvDuration(t *testing.T) {
 	const key = "TEST_STALE_AFTER"
 	fallback := 5 * time.Minute
