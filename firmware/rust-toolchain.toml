@@ -1,3 +1,6 @@
 [toolchain]
-channel = "nightly"
+# Pinned on purpose: the ESP-IDF support in the Rust standard library breaks from time to time on
+# newer nightlies. To update, change the date here and in .github/workflows/firmware-ci.yml,
+# then check that the firmware still builds and flashes.
+channel = "nightly-2026-06-10"
 components = ["rust-src"]

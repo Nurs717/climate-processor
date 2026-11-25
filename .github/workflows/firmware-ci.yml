@@ -46,9 +46,11 @@ jobs:
             args: --all-targets --all-features -- -D warnings
     steps:
       - uses: actions/checkout@v6
+      # Keep the date in sync with firmware/rust-toolchain.toml. A fixed nightly keeps CI
+      # reproducible: ESP-IDF std support sometimes breaks on newer nightlies.
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-06-10
           components: rust-src rustfmt clippy
       - uses: Swatinem/rust-cache@v2
         with:
