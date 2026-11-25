@@ -1,5 +1,5 @@
 # climate-processor
-[![CI](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml)
+[![CI](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml) [![Firmware CI](https://github.com/Nurs717/climate-processor/actions/workflows/firmware-ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/firmware-ci.yml)
 
 A small Go service that turns room climate readings from an ESP32 + BME280 sensor into Prometheus metrics and answers questions about them in a Telegram bot.
 
@@ -11,7 +11,7 @@ flowchart LR
     G <-- "/status, alerts" --> T[Telegram bot]
 ```
 
-The sensor publishes `{"temperature": 21.5, "humidity": 45.2, "pressure": 101325}` (°C, %, Pa) every few seconds. The service validates each message, updates the metrics and keeps the latest reading for the bot.
+The sensor publishes `{"temperature": 21.5, "humidity": 45.2, "pressure": 101325}` (°C, %, Pa) every few seconds. The service validates each message, updates the metrics and keeps the latest reading for the bot. The firmware that produces these readings is in [`firmware/`](firmware/README.md).
 
 ## Features
 
@@ -31,6 +31,7 @@ internal/domain/    payload and reading types
 internal/handler/   MQTT subscriber and Telegram bot
 internal/metrics/   Prometheus metrics
 internal/service/   validation, state, staleness watcher
+firmware/           ESP32-C3 + BME280 firmware in Rust (MQTT over TLS), with its own CI
 deploy/local/       one-command local stack: broker, service, Prometheus, Grafana
 deploy/gcp/         cloud deployment: Mosquitto (TLS, ACL) + service on a small VM, CI/CD setup
 Makefile            everyday commands (run `make` to list them)
