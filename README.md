@@ -152,3 +152,7 @@ Deploying to the cloud (a small Google Cloud VM with Mosquitto over TLS, passwor
 
 - The broker is meant to be exposed only over TLS (port 8883) with per-device credentials; the ACL lets the sensor publish and the service only subscribe.
 - Secrets (`.env`, private keys, the password file) are git-ignored; never commit them. A bot token that was ever exposed should be revoked in @BotFather.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
