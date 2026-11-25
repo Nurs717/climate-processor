@@ -18,9 +18,39 @@ The sensor publishes `{"temperature": 21.5, "humidity": 45.2, "pressure": 101325
 - **Reliable MQTT client**: subscribes on every (re)connect, retries until the broker is reachable, optional TLS with a private CA and username/password.
 - **Input validation**: missing fields and values outside the BME280 range are rejected and counted in `climate_messages_rejected_total{reason}`.
 - **Stale-data detection**: if no reading arrives for `STALE_AFTER`, `/status` says so and the bot sends one "sensor is silent" alert, and one more when data resumes.
-- **Telegram bot** with admin-approved access. A new person sends `/start`, the admin gets a message with **Allow / Deny** buttons. Admins also have `/users` (list, remove) and `/remove <chat id>`. Approved users are stored in a file and survive restarts. `/status` shows the temperature, humidity, pressure in mmHg and the time in the configured timezone.
+- **Telegram bot** with admin-approved access, `/status` with the current reading and alerts when the sensor goes silent (see [Telegram bot](#telegram-bot)).
 - **Prometheus metrics** and a `/healthz` endpoint on one HTTP port.
 - **Graceful shutdown** on SIGINT/SIGTERM, HTTP server timeouts, small Alpine-based Docker image that runs as a non-root user and has a healthcheck.
+
+## Running in production
+
+The service runs on a single Google Cloud VM (`e2-micro`, Always Free tier) next to a TLS-only
+Mosquitto broker; the sensor connects to it over the internet.
+
+```mermaid
+flowchart LR
+    S["ESP32-C3 sensor"] -- "MQTTS :8883" --> V
+    subgraph V["GCP VM (e2-micro)"]
+        B[(Mosquitto)] --> G["climate-processor"]
+    end
+    G --> T[Telegram bot]
+    GH["GitHub Actions"] -- "build, push, deploy<br/>(Workload Identity, IAP SSH)" --> V
+```
+
+- **Delivery**: every push to `main` runs CI (tests, lint, vulncheck). On success, CD builds the image,
+  pushes it to Artifact Registry and deploys it over an SSH session tunnelled through IAP (port 22 is
+  closed to the internet). There are no long-lived keys: GitHub authenticates to Google with
+  Workload Identity Federation, and only runs on `main` of this repository are accepted.
+- **Secrets**: the Telegram token, the MQTT password and the admin IDs live in Secret Manager. The VM
+  runs under its own service account that can read only those three secrets and the images.
+- **Infrastructure as code**: the VM, network, IAM, image registry and secret containers are described
+  in Terraform ([`infra/`](infra/README.md)). The state is in a versioned GCS bucket, and a separate CI
+  workflow checks formatting and validity on every change.
+- **Observability**: Prometheus metrics, a provisioned Grafana dashboard (a local stack, or pointed at the
+  cloud VM through an IAP tunnel with `make tunnel` and `make cloud-up`), and a Telegram alert when the
+  sensor goes silent.
+
+Details: [`deploy/gcp/README.md`](deploy/gcp/README.md) and [`infra/README.md`](infra/README.md).
 
 ## Project layout
 
@@ -56,6 +86,30 @@ Message the bot `/start`: while no admin is configured it shows your chat ID. Pu
 Without Docker you need an MQTT broker on `127.0.0.1:1883`; then `make run` starts the service and `make test` runs the tests. Run `make` to list all commands.
 
 This is the local setup. Running it in the cloud with automatic deployment from GitHub Actions is described in [`deploy/gcp/README.md`](deploy/gcp/README.md).
+
+## Telegram bot
+
+| Command | Who | What it does |
+|---|---|---|
+| `/start` | everyone | Approved users get a greeting. A new person sends an access request to the admins and waits for the decision. |
+| `/status` | approved users | Current temperature, humidity, pressure (mmHg) and the time of the last reading in the configured timezone. |
+| `/users` | admins, private chat | Lists approved users, each with a button to remove access. |
+| `/remove <chat id>` | admins, private chat | Removes a user by chat ID. |
+
+**Access model.** Admins are the chat IDs in `TELEGRAM_ADMIN_CHAT_IDS`; they always have access. When
+a new person sends `/start`, every admin gets a message with **Allow / Deny** buttons and the person is
+told that the request was sent. Approved users are stored in `ACCESS_FILE`, so they survive restarts
+and deployments.
+
+**Safeguards.** Admin commands work only in a private chat with an admin, so they are ignored in groups
+and strangers get no hint that they exist. The buttons are checked on the server by the user ID of
+whoever pressed them: a forwarded message or a forged button payload gives a stranger nothing.
+
+**Alerts.** If no reading arrives for `STALE_AFTER`, everyone with access gets one "sensor is silent"
+message, and one more when data resumes.
+
+First run: while no admin is configured, `/start` replies with your chat ID. Put it into
+`TELEGRAM_ADMIN_CHAT_IDS` and restart.
 
 ## Configuration
 
