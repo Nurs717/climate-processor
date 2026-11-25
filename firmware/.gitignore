@@ -1,0 +1,8 @@
+/.vscode
+/.idea
+/.embuild
+/target
+
+# Settings with secrets (Wi-Fi, MQTT password) and the broker CA: keep them out of git.
+/cfg.toml
+/certs/ca.crt

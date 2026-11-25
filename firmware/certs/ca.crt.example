@@ -1,0 +1,2 @@
+Placeholder so that the firmware compiles without the real CA (for example in CI).
+Copy your broker CA certificate (PEM) to certs/ca.crt for a firmware that can connect.

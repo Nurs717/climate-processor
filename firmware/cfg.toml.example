@@ -1,0 +1,8 @@
+# Copy this file to cfg.toml (it is git-ignored) and fill in your values, then rebuild.
+# The section name must be the package name from Cargo.toml.
+[temp_with_wifi]
+wifi_ssid = "your-wifi-name"
+wifi_password = "your-wifi-password" # empty for an open network
+mqtt_url = "mqtts://203.0.113.10:8883" # broker address, see deploy/gcp/README.md of the service
+mqtt_username = "esp32"
+mqtt_password = "password-printed-by-gen-secrets.sh"
