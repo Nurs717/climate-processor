@@ -9,3 +9,4 @@ k8s-cloud
 *.yaml
 .env
 *.key
+firmware

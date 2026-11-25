@@ -1,0 +1,62 @@
+name: Firmware CI
+
+# Builds and checks the ESP32-C3 firmware in firmware/. It runs only when the firmware changes;
+# the Go pipeline (ci.yml, which also triggers the deploy) ignores these paths.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-ci.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Lets the ESP-IDF tooling download files without hitting the anonymous GitHub rate limit.
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+defaults:
+  run:
+    working-directory: firmware
+
+jobs:
+  rust-checks:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        action:
+          - command: build
+            args: --release
+          - command: fmt
+            args: --all -- --check --color always
+          - command: clippy
+            args: --all-targets --all-features -- -D warnings
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: rust-src rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: firmware
+      - name: Install ldproxy
+        run: cargo install ldproxy
+      # The real CA certificate is not in git; a placeholder is enough for the firmware to compile.
+      - name: Use the placeholder CA certificate
+        run: cp certs/ca.crt.example certs/ca.crt
+      - name: Run cargo ${{ matrix.action.command }}
+        run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}

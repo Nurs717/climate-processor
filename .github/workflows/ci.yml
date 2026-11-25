@@ -3,7 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "firmware/**"
   pull_request:
+    paths-ignore:
+      - "firmware/**"
 
 permissions:
   contents: read
