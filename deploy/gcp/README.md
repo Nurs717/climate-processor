@@ -5,8 +5,10 @@ One small VM runs the broker and the service. Prometheus/Grafana are not deploye
 
 > This page is about the cloud deployment. To run everything locally with one command (no cloud needed), see the [Quick start in the root README](../../README.md#quick-start-local-one-command).
 
+> The cloud resources (VM, network, service accounts and permissions, registry, secret containers, Workload Identity) are also defined as code in [`infra/`](../../infra/README.md). The `gcloud` commands below are the same setup done by hand: a reference, not needed when you use Terraform. Terraform does not set up the VM software (Docker, swap, certificates), the secret values or the GitHub Variables.
+
 > Free tier: one e2-micro in `us-central1`, `us-west1` or `us-east1`, up to 30 GB of standard disk.
-> The external IPv4 address is billed separately (a few dollars a month), so set a budget alert.
+> Google may bill the external IPv4 address separately: look for the "External IP" line in the billing report and set a budget alert.
 
 ## How deployment works
 
@@ -124,6 +126,8 @@ sudo shred -u /opt/climate/certs/ca.key && rm ~/ca.key ~/ca.crt
 ### 5. Secret Manager and the VM's service account
 
 The Telegram token, the MQTT password of the service and the admin chat IDs live in Secret Manager. `deploy.sh` copies them into `.env` on every deploy. The VM runs as its own service account, which can read exactly these three secrets and the images, and nothing else.
+
+If Terraform has already created the secrets (`infra/secrets.tf`), `gcloud secrets create` below would fail: add the values with `gcloud secrets versions add <name> --data-file=-` instead.
 
 ```bash
 gcloud services enable secretmanager.googleapis.com

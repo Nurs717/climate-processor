@@ -10,7 +10,6 @@ resource "google_compute_instance" "climate_vm" {
   boot_disk {
     auto_delete = true
     device_name = "persistent-disk-0"
-    source      = "https://www.googleapis.com/compute/v1/projects/${var.project_id}/zones/${var.zone}/disks/climate-vm"
 
     initialize_params {
       image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2404-noble-amd64-v20261105"

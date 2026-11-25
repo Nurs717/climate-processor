@@ -1,5 +1,5 @@
 # climate-processor
-[![CI](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml) [![Firmware CI](https://github.com/Nurs717/climate-processor/actions/workflows/firmware-ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/firmware-ci.yml)
+[![CI](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/ci.yml) [![Firmware CI](https://github.com/Nurs717/climate-processor/actions/workflows/firmware-ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/firmware-ci.yml) [![Terraform CI](https://github.com/Nurs717/climate-processor/actions/workflows/terraform-ci.yml/badge.svg)](https://github.com/Nurs717/climate-processor/actions/workflows/terraform-ci.yml)
 
 A small Go service that turns room climate readings from an ESP32 + BME280 sensor into Prometheus metrics and answers questions about them in a Telegram bot.
 
@@ -34,6 +34,7 @@ internal/service/   validation, state, staleness watcher
 firmware/           ESP32-C3 + BME280 firmware in Rust (MQTT over TLS), with its own CI
 deploy/local/       one-command local stack: broker, service, Prometheus, Grafana
 deploy/gcp/         cloud deployment: Mosquitto (TLS, ACL) + service on a small VM, CI/CD setup
+infra/              Terraform: the core GCP resources (state in a GCS bucket), with its own CI
 Makefile            everyday commands (run `make` to list them)
 ```
 
