@@ -39,7 +39,7 @@ jobs:
       matrix:
         action:
           - command: build
-            args: --release
+            args: --release -vv
           - command: fmt
             args: --all -- --check --color always
           - command: clippy
@@ -62,3 +62,11 @@ jobs:
         run: cp certs/ca.crt.example certs/ca.crt
       - name: Run cargo ${{ matrix.action.command }}
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
+      # TEMPORARY: shows which clang and tools the runner has (debugging the esp-idf-sys build).
+      - name: Diagnostics
+        run: |
+          echo "LIBCLANG_PATH=${LIBCLANG_PATH:-<not set>}"
+          clang --version || echo "no system clang"
+          ls /usr/lib/llvm-*/lib/libclang*.so* 2>/dev/null || echo "no system libclang"
+          python3 --version
+          git --version
