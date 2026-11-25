@@ -31,6 +31,17 @@ pub struct Config {
     mqtt_password: &'static str,
 }
 
+/// MQTT topic the Go service subscribes to.
+const MQTT_TOPIC: &str = "home/room/climate";
+/// MQTT client id, it must be unique among the clients of one broker.
+const MQTT_CLIENT_ID: &str = "esp32_c3_supermini";
+/// Pause between two measurements.
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+/// If nothing was published for this long, the board restarts itself.
+const MAX_SILENCE: Duration = Duration::from_secs(10 * 60);
+/// Pause between two attempts to initialize the sensor.
+const SENSOR_RETRY_PAUSE: Duration = Duration::from_secs(5);
+
 /// Returns the setting or fails with a clear message, instead of a confusing error later on.
 fn require(name: &str, value: &'static str) -> anyhow::Result<&'static str> {
     if value.is_empty() {
@@ -74,7 +85,7 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    log::info!("Старт IoT Ноды...");
+    log::info!("Starting the IoT node...");
 
     // Fail fast, before touching any hardware, if the build has no settings.
     let app_config = CONFIG;
@@ -85,8 +96,8 @@ fn main() -> anyhow::Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    // 1. Подключаемся к Wi-Fi
-    let _wifi = wifi::connect_wifi(
+    // 1. Connect to Wi-Fi.
+    let mut wifi_driver = wifi::connect_wifi(
         peripherals.modem,
         sys_loop,
         nvs,
@@ -97,12 +108,12 @@ fn main() -> anyhow::Result<()> {
     // 2. Synchronize the clock (needed for TLS). Keep the handle alive: dropping it stops SNTP.
     let _sntp = sync_time()?;
 
-    // 3. MQTT client over TLS
+    // 3. MQTT client over TLS.
     let connected = Arc::new(AtomicBool::new(false));
     let connected_in_cb = connected.clone();
 
     let mqtt_config = MqttClientConfiguration {
-        client_id: Some("esp32_c3_supermini"),
+        client_id: Some(MQTT_CLIENT_ID),
         username: non_empty(app_config.mqtt_username),
         password: non_empty(app_config.mqtt_password),
         // Verify the broker against our private CA only; nothing else is trusted.
@@ -124,72 +135,96 @@ fn main() -> anyhow::Result<()> {
             other => log::debug!("MQTT: event: {other:?}"),
         })?;
 
-    // 4. Инициализация I2C на чистых пинах GPIO 6 и GPIO 7
-    log::info!("Инициализация шины I2C...");
-    let i2c_config = I2cConfig::new().baudrate(100_u32.kHz().into()); // Снизим частоту до 100 kHz для надежности
+    // 4. The sensor on the I2C bus: GPIO 6 is SDA, GPIO 7 is SCL.
+    log::info!("Initializing the I2C bus...");
+    let i2c_config = I2cConfig::new().baudrate(100_u32.kHz().into()); // 100 kHz is slower but more reliable
     let i2c = I2cDriver::new(
         peripherals.i2c0,
-        peripherals.pins.gpio6, // Сюда подключай провод SDA
-        peripherals.pins.gpio7, // Сюда подключай провод SCL
+        peripherals.pins.gpio6, // SDA wire
+        peripherals.pins.gpio7, // SCL wire
         &i2c_config,
     )?;
 
-    // Обернем инициализацию датчика в безопасный блок, чтобы плата не крашилась,
-    // а мы могли понять, в чем дело.
     let mut bme280 = Bme280::new(i2c, Delay::new_default());
 
-    log::info!("Калибровка датчика BME280...");
-    if let Err(e) = bme280.init() {
-        log::error!(
-            "!!! Датчик BME280 не ответил по базовому адресу: {:?} !!!",
-            e
-        );
-        log::error!(
-            "Проверь: 1) SDA -> GPIO 6, SCL -> GPIO 7. 2) Питание датчика на VCC (3.3V) и GND."
-        );
-        return Err(e.into());
-    }
-
-    bme280.set_sampling_configuration(
-        Configuration::default()
-            .with_temperature_oversampling(Oversampling::Oversample1)
-            .with_humidity_oversampling(Oversampling::Oversample1)
-            .with_pressure_oversampling(Oversampling::Oversample1)
-            .with_sensor_mode(SensorMode::Normal),
-    )?;
-
-    log::info!("Датчик готов. Начинаем цикл отправки...");
-
+    // Retry until the sensor answers: a loose wire must not leave the board dead.
+    log::info!("Initializing the BME280 sensor...");
     loop {
-        if !connected.load(Ordering::Relaxed) {
-            log::warn!("MQTT is not connected yet, skipping this sample");
-            thread::sleep(Duration::from_secs(5));
+        if let Err(e) = bme280.init() {
+            log::error!("BME280 did not answer: {e:?}");
+            log::error!(
+                "Check: 1) SDA -> GPIO 6, SCL -> GPIO 7. 2) Sensor power: VCC (3.3V) and GND."
+            );
+            thread::sleep(SENSOR_RETRY_PAUSE);
             continue;
         }
 
-        if let Ok(data) = bme280.read_sample() {
-            let temp = data.temperature.unwrap_or(0.0);
-            let hum = data.humidity.unwrap_or(0.0);
-            let press = data.pressure.unwrap_or(0.0);
+        let sampling = Configuration::default()
+            .with_temperature_oversampling(Oversampling::Oversample1)
+            .with_humidity_oversampling(Oversampling::Oversample1)
+            .with_pressure_oversampling(Oversampling::Oversample1)
+            .with_sensor_mode(SensorMode::Normal);
 
-            let json_payload = format!(
-                "{{\"temperature\": {:.2}, \"humidity\": {:.2}, \"pressure\": {:.2}}}",
-                temp, hum, press
-            );
-
-            match mqtt_client.publish(
-                "home/room/climate",
-                QoS::AtMostOnce,
-                false,
-                json_payload.as_bytes(),
-            ) {
-                Ok(_) => log::info!("[MQTT СТРИМ] Отправлено: {}", json_payload),
-                Err(e) => log::warn!("Ошибка отправки в MQTT: {:?}", e),
+        match bme280.set_sampling_configuration(sampling) {
+            Ok(_) => break,
+            Err(e) => {
+                log::error!("Cannot configure the BME280: {e:?}");
+                thread::sleep(SENSOR_RETRY_PAUSE);
             }
-        } else {
-            log::warn!("Не удалось прочитать данные с датчика (Плата не прислала данные).");
+        }
+    }
+
+    log::info!("Sensor ready, starting the measurement loop");
+
+    let mut last_publish = Instant::now();
+    loop {
+        thread::sleep(SAMPLE_INTERVAL);
+
+        // The last line of defence: if the board has been silent for too long, reboot it.
+        if last_publish.elapsed() > MAX_SILENCE {
+            log::error!(
+                "Nothing was published for {} seconds, restarting",
+                MAX_SILENCE.as_secs()
+            );
+            unsafe { esp_idf_svc::sys::esp_restart() };
         }
 
-        thread::sleep(Duration::from_secs(5));
+        if !wifi::ensure_connected(&mut wifi_driver) {
+            continue;
+        }
+
+        if !connected.load(Ordering::Relaxed) {
+            log::warn!("MQTT is not connected yet, skipping this sample");
+            continue;
+        }
+
+        let sample = match bme280.read_sample() {
+            Ok(sample) => sample,
+            Err(e) => {
+                log::warn!("Cannot read the sensor: {e:?}");
+                continue;
+            }
+        };
+
+        // Never send a made-up value: a missing measurement skips the whole sample.
+        let (Some(temperature), Some(humidity), Some(pressure)) =
+            (sample.temperature, sample.humidity, sample.pressure)
+        else {
+            log::warn!("The sensor returned an incomplete sample, skipping it");
+            continue;
+        };
+
+        let payload = format!(
+            "{{\"temperature\": {:.2}, \"humidity\": {:.2}, \"pressure\": {:.2}}}",
+            temperature, humidity, pressure
+        );
+
+        match mqtt_client.publish(MQTT_TOPIC, QoS::AtMostOnce, false, payload.as_bytes()) {
+            Ok(_) => {
+                last_publish = Instant::now();
+                log::info!("Published: {payload}");
+            }
+            Err(e) => log::warn!("MQTT publish failed: {e:?}"),
+        }
     }
 }
