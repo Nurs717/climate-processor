@@ -1,0 +1,9 @@
+# Same uid as in the local stack, so the same dashboard JSON works in both modes.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:9090 # Grafana runs in the host network here
+    isDefault: true

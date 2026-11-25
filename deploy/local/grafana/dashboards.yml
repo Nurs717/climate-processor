@@ -1,0 +1,10 @@
+# Tells Grafana to load every dashboard JSON from the mounted directory at start-up.
+apiVersion: 1
+providers:
+  - name: climate
+    folder: Climate
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false # the JSON file in git is the source of truth
+    options:
+      path: /var/lib/grafana/dashboards

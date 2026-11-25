@@ -6,9 +6,12 @@ COMPOSE := docker compose -f deploy/local/docker-compose.yml
 T ?= 21.5
 H ?= 45
 P ?= 101325
+VM_NAME  ?= climate-vm
+VM_ZONE  ?= us-central1-a
+CLOUD_COMPOSE := docker compose -f deploy/local/docker-compose.cloud.yml
 
 .DEFAULT_GOAL := help
-.PHONY: help test lint vuln build run up down logs ps send metrics
+.PHONY: help test lint vuln build run up down logs ps send metrics tunnel cloud-up cloud-down
 
 help: ## Show this list
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-9s %s\n", $$1, $$2}'
@@ -50,3 +53,13 @@ send: ## Publish a test reading to the local broker (T=temperature H=humidity P=
 
 metrics: ## Show the room_* metrics exposed by the service
 	@curl -s localhost:2112/metrics | grep '^room_'
+
+tunnel: ## Forward the cloud service metrics to localhost:12112 (keep it running)
+	gcloud compute ssh $(VM_NAME) --zone=$(VM_ZONE) --tunnel-through-iap -- -N -L 12112:127.0.0.1:2112
+
+cloud-up: ## Grafana + Prometheus on this machine, reading the cloud VM (needs `make tunnel`)
+	$(CLOUD_COMPOSE) up -d
+	@echo "Grafana: http://localhost:3000 (admin/admin)"
+
+cloud-down: ## Stop the cloud-mode Grafana and Prometheus
+	$(CLOUD_COMPOSE) down

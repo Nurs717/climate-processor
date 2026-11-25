@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s # enough for a room sensor, and gentler on the SSH tunnel
+
+scrape_configs:
+  - job_name: climate-processor-cloud
+    static_configs:
+      - targets: ["127.0.0.1:12112"] # the local end of `make tunnel`

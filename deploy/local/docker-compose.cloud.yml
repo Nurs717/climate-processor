@@ -1,0 +1,33 @@
+# Grafana + Prometheus on this machine, reading the metrics of the service that runs on the cloud VM.
+# 1) make tunnel   (keep it running)   2) make cloud-up   3) open http://localhost:3000
+# Do not run it together with `make up`: both use ports 3000 and 9090.
+
+name: climate-cloud
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    network_mode: host # lets it reach the SSH tunnel, which listens on 127.0.0.1 of this machine (Linux only)
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.listen-address=127.0.0.1:9090 # not visible from the local network
+    volumes:
+      - ./prometheus.cloud.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus # history survives restarts (but there are gaps while the tunnel is down)
+
+  grafana:
+    image: grafana/grafana:latest
+    network_mode: host
+    depends_on:
+      - prometheus
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SECURITY_ADMIN_PASSWORD: admin # local use only, the port is not exposed
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/climate.json
+    volumes:
+      - ./grafana/cloud/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  prometheus-data:
