@@ -33,7 +33,8 @@ defaults:
 jobs:
   rust-checks:
     name: Rust checks
-    runs-on: ubuntu-latest
+    # Pinned image: a newer libclang on ubuntu-latest broke the esp-idf-sys bindings (bindgen).
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -57,16 +58,17 @@ jobs:
           workspaces: firmware
       - name: Install ldproxy
         run: cargo install ldproxy
-      # The real CA certificate is not in git; a placeholder is enough for the firmware to compile.
-      - name: Use the placeholder CA certificate
-        run: cp certs/ca.crt.example certs/ca.crt
-      - name: Run cargo ${{ matrix.action.command }}
-        run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
       # TEMPORARY: shows which clang and tools the runner has (debugging the esp-idf-sys build).
       - name: Diagnostics
         run: |
+          head -2 /etc/os-release
           echo "LIBCLANG_PATH=${LIBCLANG_PATH:-<not set>}"
           clang --version || echo "no system clang"
           ls /usr/lib/llvm-*/lib/libclang*.so* 2>/dev/null || echo "no system libclang"
           python3 --version
           git --version
+      # The real CA certificate is not in git; a placeholder is enough for the firmware to compile.
+      - name: Use the placeholder CA certificate
+        run: cp certs/ca.crt.example certs/ca.crt
+      - name: Run cargo ${{ matrix.action.command }}
+        run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
