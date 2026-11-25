@@ -9,3 +9,10 @@ deploy/gcp/mosquitto/passwd
 
 # old AWS/EKS manifests with a plaintext token; will return as a GKE version using Secrets
 k8s-cloud/
+
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfplan
+infra/crash.log

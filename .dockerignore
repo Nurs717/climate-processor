@@ -10,3 +10,4 @@ k8s-cloud
 .env
 *.key
 firmware
+infra
