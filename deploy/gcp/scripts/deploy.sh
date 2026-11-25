@@ -10,9 +10,27 @@ cd "$(dirname "$0")/.."
 # Let Docker pull from Artifact Registry with the VM's own service account (it has the Reader role).
 gcloud auth configure-docker "${IMAGE%%/*}" --quiet
 
-# Remember the deployed image in .env, so a manual `docker compose up -d` starts the same version.
+# .env is rebuilt on every deploy: the image tag (so a manual `docker compose up -d` starts the same version)
+# plus the application secrets from Secret Manager. The VM's service account may read exactly these three
+# secrets. To rotate one, add a new secret version and deploy again; nothing is edited on the VM by hand.
+SECRETS=(
+  MQTT_PASSWORD=climate-mqtt-password
+  TELEGRAM_BOT_TOKEN=climate-telegram-bot-token
+  TELEGRAM_ADMIN_CHAT_IDS=climate-telegram-admin-chat-ids
+)
+
 umask 077
-{ grep -v '^CLIMATE_APP_IMAGE=' .env || true; echo "CLIMATE_APP_IMAGE=$IMAGE"; } > .env.new
+trap 'rm -f .env.new' EXIT
+{
+  echo "CLIMATE_APP_IMAGE=$IMAGE"
+  for entry in "${SECRETS[@]}"; do
+    secret="${entry#*=}"
+    value="$(gcloud secrets versions access latest --secret="$secret")"
+    # Stop before anything is restarted if a secret is missing or empty.
+    [ -n "$value" ] || { echo "secret $secret is empty" >&2; exit 1; }
+    echo "${entry%%=*}=$value"
+  done
+} > .env.new
 mv .env.new .env
 
 docker compose pull climate-app

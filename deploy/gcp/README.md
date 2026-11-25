@@ -15,12 +15,12 @@ git push to main → CI (tests, lint, vulncheck) → CD workflow:
   1. builds the Docker image and pushes it to Artifact Registry (tag = git commit SHA)
   2. opens an SSH session to the VM through an IAP tunnel (port 22 is closed to the internet)
   3. ships this folder to /opt/climate and runs scripts/deploy.sh there
-  4. deploy.sh pulls the image, restarts the service and waits until it is healthy
+  4. deploy.sh writes .env from Secret Manager, pulls the image, restarts the service and waits until it is healthy
 ```
 
 - GitHub authenticates to Google with **Workload Identity Federation**: no JSON keys anywhere. Only runs of this repository on `main` can use the `github-deployer` service account.
 - Everything the pipeline needs is configured as GitHub **Variables** (not secrets): `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_ZONE`, `GCP_VM_NAME`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`.
-- On the VM the stack lives in `/opt/climate` (owned by root). The pipeline replaces the files that are in git; the secrets that are not in git (`.env`, `certs/`, `mosquitto/passwd`) are never touched.
+- On the VM the stack lives in `/opt/climate` (owned by root). The pipeline replaces the files that are in git and never touches `certs/` or `mosquitto/passwd`. `.env` is rebuilt by `deploy.sh` from Secret Manager.
 - Rollback: re-run the CD workflow of an older commit in the Actions tab.
 
 ## One-time setup
@@ -61,8 +61,11 @@ curl -fsSL https://get.docker.com | sudo sh
 gcloud services enable artifactregistry.googleapis.com iamcredentials.googleapis.com sts.googleapis.com iap.googleapis.com oslogin.googleapis.com
 gcloud artifacts repositories create climate --repository-format=docker --location=us-central1
 
-# The VM only reads images (its default service account already has the read-only storage scope)
-VM_SA=$(gcloud compute instances describe climate-vm --zone=us-central1-a --format='value(serviceAccounts[0].email)')
+# The VM runs as its own least-privilege service account (attached to the VM in step 5):
+# it may read the images and three secrets, nothing else
+PROJECT_ID=$(gcloud config get-value project)
+gcloud iam service-accounts create climate-vm --display-name="climate-vm runtime"
+VM_SA="climate-vm@${PROJECT_ID}.iam.gserviceaccount.com"
 gcloud artifacts repositories add-iam-policy-binding climate --location=us-central1 \
   --member="serviceAccount:$VM_SA" --role=roles/artifactregistry.reader
 ```
@@ -101,13 +104,13 @@ Then set the six GitHub Variables listed above (`gh variable set NAME --repo <ow
 
 ### 4. Secrets on the VM
 
-The secrets live only on the VM, in `/opt/climate`, and are never committed. On the VM, once:
+Nothing secret is committed. The CA, the broker certificate and the MQTT password file are created on the VM (`certs/`, `mosquitto/passwd`); the three application secrets move to Secret Manager in step 5. On the VM, once:
 
 ```bash
 git clone https://github.com/<owner>/<repo>.git /tmp/climate-src
 sudo mkdir -p /opt/climate && sudo cp -r /tmp/climate-src/deploy/gcp/. /opt/climate/ && rm -rf /tmp/climate-src
 sudo bash /opt/climate/scripts/gen-secrets.sh <VM-external-IP>
-sudo nano /opt/climate/.env      # set TELEGRAM_BOT_TOKEN (from @BotFather)
+sudo nano /opt/climate/.env      # set TELEGRAM_BOT_TOKEN (from @BotFather) and TELEGRAM_ADMIN_CHAT_IDS
 ```
 
 The script prints the ESP32 username and password once: save them in a password manager. Then **move the CA private key off the VM** (it is only needed to issue a new broker certificate) and keep `ca.crt` for the firmware:
@@ -116,6 +119,36 @@ The script prints the ESP32 username and password once: save them in a password 
 sudo cp /opt/climate/certs/ca.crt /opt/climate/certs/ca.key ~ && sudo chown $USER ~/ca.crt ~/ca.key
 # download both (for example with `gcloud compute scp --tunnel-through-iap`), then on the VM:
 sudo shred -u /opt/climate/certs/ca.key && rm ~/ca.key ~/ca.crt
+```
+
+### 5. Secret Manager and the VM's service account
+
+The Telegram token, the MQTT password of the service and the admin chat IDs live in Secret Manager. `deploy.sh` copies them into `.env` on every deploy. The VM runs as its own service account, which can read exactly these three secrets and the images, and nothing else.
+
+```bash
+gcloud services enable secretmanager.googleapis.com
+
+# Copy the three values from the VM's .env into Secret Manager. They travel through a pipe and never appear on screen.
+for pair in climate-mqtt-password:MQTT_PASSWORD climate-telegram-bot-token:TELEGRAM_BOT_TOKEN climate-telegram-admin-chat-ids:TELEGRAM_ADMIN_CHAT_IDS; do
+  secret=${pair%%:*}; key=${pair##*:}
+  gcloud compute ssh climate-vm --zone=us-central1-a --tunnel-through-iap --quiet \
+    --command "sudo grep '^${key}=' /opt/climate/.env | cut -d= -f2- | tr -d '\n'" \
+    | gcloud secrets create "$secret" --data-file=- --replication-policy=automatic
+  gcloud secrets add-iam-policy-binding "$secret" \
+    --member="serviceAccount:$VM_SA" --role=roles/secretmanager.secretAccessor
+done
+
+# A VM can change its service account only while it is stopped (the reserved static IP stays attached)
+gcloud compute instances stop climate-vm --zone=us-central1-a
+gcloud compute instances set-service-account climate-vm --zone=us-central1-a \
+  --service-account="$VM_SA" --scopes=cloud-platform
+gcloud compute instances start climate-vm --zone=us-central1-a
+```
+
+To rotate a value, add a new version and run the CD workflow again (Actions tab):
+
+```bash
+gcloud secrets versions add climate-telegram-bot-token --data-file=-   # paste the value, then Ctrl+D (not Enter)
 ```
 
 The first push to `main` after this deploys the stack.
@@ -135,12 +168,12 @@ The broker certificate is valid for 825 days from the day `gen-secrets.sh` ran. 
 
 ## Who may use the bot
 
-Admins are set in `TELEGRAM_ADMIN_CHAT_IDS` in `/opt/climate/.env`. Everybody else sends `/start` to the bot and an admin
+Admins are set in the `climate-telegram-admin-chat-ids` secret (Secret Manager). Everybody else sends `/start` to the bot and an admin
 approves or declines the request with a button. Approved users are stored in `/data/access.json` (the `climate-data` volume),
 so they survive deployments. Admins manage the list in the bot with `/users` and `/remove <chat id>`, no SSH needed.
 
 To make yourself the first admin, send `/start` to the bot while the variable is empty: it replies with your chat ID.
-Put it into `.env` and run `sudo docker compose up -d`. (Older setups used `TELEGRAM_ALLOWED_CHAT_IDS`; it is no longer read.)
+Add it as a new version of that secret and run the CD workflow again. (Older setups used `TELEGRAM_ALLOWED_CHAT_IDS`; it is no longer read.)
 
 ## Check without hardware
 
@@ -156,5 +189,5 @@ Then `/status` in the bot should show the values. If no message arrives for 5 mi
 
 ## ESP32 firmware
 
-The firmware needs: broker address `mqtts://<IP>:8883`, username `esp32` and its password, the embedded `ca.crt`
-for certificate verification, and Wi-Fi/MQTT secrets kept out of the sources in a config file that is not committed to git.
+The firmware lives in [`firmware/`](../../firmware/README.md). It needs the broker address `mqtts://<IP>:8883`, the username `esp32` and its password,
+the CA certificate `ca.crt` for certificate verification, and the Wi-Fi settings in a `cfg.toml` that is not committed to git.
