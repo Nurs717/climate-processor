@@ -5,9 +5,11 @@ on:
     branches: [main]
     paths-ignore:
       - "firmware/**"
+      - ".github/workflows/firmware-ci.yml"
   pull_request:
     paths-ignore:
       - "firmware/**"
+      - ".github/workflows/firmware-ci.yml"
 
 permissions:
   contents: read
