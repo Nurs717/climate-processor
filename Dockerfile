@@ -28,8 +28,8 @@ COPY --from=builder /build/climate-app .
 
 USER app
 
-# Port for Prometheus metrics and /healthz
-EXPOSE 2112
+# Port for Prometheus metrics and /healthz, and the port of the REST API
+EXPOSE 2112 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD wget -qO- http://127.0.0.1:2112/healthz >/dev/null || exit 1

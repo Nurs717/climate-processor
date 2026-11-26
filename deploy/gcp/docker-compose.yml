@@ -68,6 +68,7 @@ services:
       - climate-data:/data
     ports:
       - "127.0.0.1:2112:2112" # metrics/healthz only on the VM itself (reach it via an SSH tunnel)
+      - "127.0.0.1:8080:8080" # REST API, also only on the VM itself until the public HTTPS front is set up
     logging:
       driver: json-file
       options:

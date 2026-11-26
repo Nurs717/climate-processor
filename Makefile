@@ -37,7 +37,7 @@ run: ## Run the service on this machine (needs a broker on 127.0.0.1:1883)
 
 up: ## Start the whole local stack (broker, service, Prometheus, Grafana)
 	$(COMPOSE) up -d --build
-	@echo "Service: http://localhost:2112/metrics  Prometheus: http://localhost:9090  Grafana: http://localhost:3000 (admin/admin)"
+	@echo "Service: http://localhost:2112/metrics  API: http://localhost:8080/api/v1/latest  Prometheus: http://localhost:9090  Grafana: http://localhost:3000 (admin/admin)"
 	@echo "Next: make send"
 
 down: ## Stop the local stack
@@ -57,9 +57,9 @@ send: ## Publish a test reading to the local broker (T=temperature H=humidity P=
 metrics: ## Show the room_* metrics exposed by the service
 	@curl -s localhost:2112/metrics | grep '^room_'
 
-tunnel: ## Forward the cloud service metrics to localhost:12112 (keep it running)
+tunnel: ## Forward the cloud metrics (localhost:12112) and the API (localhost:18080); keep it running
 	gcloud compute ssh $(VM_NAME) --zone=$(VM_ZONE) --tunnel-through-iap -- \
-		-N -L 12112:127.0.0.1:2112 \
+		-N -L 12112:127.0.0.1:2112 -L 18080:127.0.0.1:8080 \
 		-o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes
 
 tunnel-keep: ## Like `make tunnel`, but reconnects by itself after a drop (for overnight runs)
