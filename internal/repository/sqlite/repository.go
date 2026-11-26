@@ -1,4 +1,4 @@
-// Package sqlite stores climate readings in a SQLite database.
+// Package sqlite stores climate readings and the sessions of the owner in a SQLite database.
 package sqlite
 
 import (
@@ -22,14 +22,14 @@ var migrationFiles embed.FS
 // readerConns is the size of the read-only connection pool.
 const readerConns = 4
 
-// Repository is a SQLite-backed store of readings. It is safe for concurrent use.
+// Repository is a SQLite-backed store of readings and sessions. It is safe for concurrent use.
 //
 // Writes and reads use separate connection pools. SQLite allows a single writer, so the writer pool has
 // one connection (no "database is locked"); in WAL mode readers do not block it, so a slow history query
 // from the API can never delay saving a reading from the sensor.
 type Repository struct {
-	writer *sql.DB // one connection: Save and migrations
-	reader *sql.DB // read-only connections: Range, Aggregate, Summary
+	writer *sql.DB // one connection: Save, sessions changes and migrations
+	reader *sql.DB // read-only connections: Range, Aggregate, Summary, Session
 }
 
 // New opens (and creates, if needed) the database at path and applies pending migrations.
