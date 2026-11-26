@@ -1,0 +1,19 @@
+# Public HTTPS front for the REST API. Caddy obtains and renews the Let's Encrypt certificate for the site
+# address by itself and redirects HTTP to HTTPS. Only the API port of the service is proxied: /metrics and
+# /healthz are served on another port that is never published to the internet.
+{
+	# Limits against slow clients that hold connections open (the VM has 1 GB of RAM).
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 30s
+			write 60s
+			idle 2m
+		}
+	}
+}
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+	reverse_proxy climate-app:8080
+}

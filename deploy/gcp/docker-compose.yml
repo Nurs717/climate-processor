@@ -1,4 +1,5 @@
-# Cloud stack for a Google Cloud e2-micro VM (1 GB RAM): MQTT broker (TLS + passwords) + Go service.
+# Cloud stack for a Google Cloud e2-micro VM (1 GB RAM): MQTT broker (TLS + passwords), Go service and
+# Caddy (HTTPS in front of the REST API).
 # Prometheus/Grafana are intentionally not here - they do not fit into 1 GB.
 # Usage: see README.md in this folder.
 
@@ -35,7 +36,7 @@ services:
       mosquitto-init:
         condition: service_completed_successfully
     ports:
-      - "8883:8883" # MQTT over TLS, the only port exposed to the internet
+      - "8883:8883" # MQTT over TLS for the sensor
     volumes:
       - mosquitto-config:/mosquitto/config:ro
       - mosquitto-data:/mosquitto/data
@@ -68,7 +69,30 @@ services:
       - climate-data:/data
     ports:
       - "127.0.0.1:2112:2112" # metrics/healthz only on the VM itself (reach it via an SSH tunnel)
-      - "127.0.0.1:8080:8080" # REST API, also only on the VM itself until the public HTTPS front is set up
+      - "127.0.0.1:8080:8080" # REST API on the VM itself (SSH tunnel); the internet reaches it through Caddy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    depends_on:
+      - climate-app
+    environment:
+      # The public host name used by ./caddy/Caddyfile. sslip.io answers with the IP address written in the name,
+      # so a valid certificate needs no purchased domain. For your own domain point its A record to the VM's
+      # static IP, change this value and push (see README, "Public HTTPS").
+      SITE_ADDRESS: 34-28-22-93.sslip.io
+    ports:
+      - "80:80" # the Let's Encrypt HTTP-01 challenge and the redirect to HTTPS
+      - "443:443" # the public API
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # certificates and the ACME account: keep it, Let's Encrypt limits new certificates
+      - caddy-config:/config
     logging:
       driver: json-file
       options:
@@ -79,3 +103,5 @@ volumes:
   mosquitto-config:
   mosquitto-data:
   climate-data:
+  caddy-data:
+  caddy-config:
