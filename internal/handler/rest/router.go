@@ -63,6 +63,10 @@ type Options struct {
 	Now func() time.Time // clock, replaced in tests (default time.Now)
 	// Limiter limits the requests of one client, told apart by IP address. nil = no limit.
 	Limiter Limiter
+	// OwnerLimiter is the higher limit of the signed-in owner, counted per user and not per address. It also
+	// takes one token per request of an IP address that sends a session token, which keeps a flood of made-up
+	// tokens away from the session store. It needs Sessions. nil = the owner has the same limit as everybody.
+	OwnerLimiter Limiter
 	// TrustedProxies are the IPs or CIDR ranges of the reverse proxies in front of the service. Their
 	// X-Forwarded-For header is believed (that is how the real client address is found); from any other
 	// peer it is ignored. Empty = no proxy is trusted, the client is the peer.
@@ -82,8 +86,10 @@ type Options struct {
 // (telegram/login, telegram/callback) and logout.
 // Request ids, access logging and panic recovery are installed in this order, so that a panic is still
 // logged as a finished request with status 500. Every route then passes the rate limiter (if there is one),
-// and a refused request is logged like any other; only after that the client is identified. It fails when
-// TrustedProxies holds an invalid entry or when SignIn is set without Sessions.
+// and a refused request is logged like any other. The endpoints that depend on who the client is pass it twice,
+// around the identity check (see limits); the sign-in routes always have the plain limit per IP address, whatever
+// token they carry. It fails when TrustedProxies holds an invalid entry or when SignIn or OwnerLimiter is set
+// without Sessions.
 func NewRouter(log *slog.Logger, reader Reader, opts Options) (http.Handler, error) {
 	if log == nil {
 		log = slog.Default()
@@ -93,6 +99,9 @@ func NewRouter(log *slog.Logger, reader Reader, opts Options) (http.Handler, err
 	}
 	if opts.SignIn != nil && opts.Sessions == nil {
 		return nil, errors.New("sign-in needs sessions")
+	}
+	if opts.OwnerLimiter != nil && opts.Sessions == nil {
+		return nil, errors.New("the owner limit needs sessions")
 	}
 	a := &api{
 		log:      log,
@@ -112,15 +121,16 @@ func NewRouter(log *slog.Logger, reader Reader, opts Options) (http.Handler, err
 	}
 	r.Use(requestID(), accessLog(log), recovery(log))
 	limit := func(cost int) gin.HandlerFunc { return rateLimit(opts.Limiter, opts.Now, cost) }
+	lim := limits{demo: opts.Limiter, owner: opts.OwnerLimiter, now: opts.Now}
 	r.NoRoute(limit(costCheap), wrap(func(*gin.Context) error {
 		return apperr.New(apperr.CodeNotFound, "rest.NoRoute", "not found")
 	}))
 
 	v1 := r.Group("/api/v1", noStore())
-	// Every endpoint passes the rate limit first, then the identity check. In this order a flood of requests with
-	// made-up tokens is stopped before it can reach the session store.
+	// Every endpoint passes a rate limit before the identity check, so that a flood of requests with made-up tokens
+	// is stopped before it can reach the session store, and another one after it, which charges the owner by user.
 	route := func(cost int, h handlerFunc) []gin.HandlerFunc {
-		return []gin.HandlerFunc{limit(cost), a.identify, wrap(h)}
+		return []gin.HandlerFunc{lim.admit(cost), a.identify, lim.settle(cost), wrap(h)}
 	}
 	v1.GET("/latest", route(costCheap, a.latest)...)
 	v1.GET("/readings", route(costHistory, a.readings)...)

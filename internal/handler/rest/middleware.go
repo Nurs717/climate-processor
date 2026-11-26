@@ -108,13 +108,19 @@ func rateLimit(l Limiter, now func() time.Time, cost int) gin.HandlerFunc {
 		return func(*gin.Context) {}
 	}
 	return func(c *gin.Context) {
-		ok, wait := l.Allow(c.ClientIP(), cost, now())
-		if ok {
-			return
-		}
-		c.Header("Retry-After", strconv.Itoa(retryAfterSeconds(wait)))
-		renderError(c, apperr.New(apperr.CodeTooManyRequests, "rest.rateLimit", "too many requests, retry later"))
+		charge(c, l, now(), c.ClientIP(), cost)
 	}
+}
+
+// charge takes cost tokens of key from the limiter. When there are not enough it answers 429 with a Retry-After
+// header and stops the request.
+func charge(c *gin.Context, l Limiter, now time.Time, key string, cost int) {
+	ok, wait := l.Allow(key, cost, now)
+	if ok {
+		return
+	}
+	c.Header("Retry-After", strconv.Itoa(retryAfterSeconds(wait)))
+	renderError(c, apperr.New(apperr.CodeTooManyRequests, "rest.rateLimit", "too many requests, retry later"))
 }
 
 // retryAfterSeconds rounds the wait up to whole seconds, the unit of the Retry-After header, and never gives 0.
