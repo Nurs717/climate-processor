@@ -83,7 +83,7 @@ func (r *Repository) Range(ctx context.Context, deviceID string, from, to time.T
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: query range: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []domain.ClimateData
 	for rows.Next() {

@@ -116,7 +116,7 @@ func TestDataSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	got, err := r.Range(ctx, "room", ts, ts.Add(time.Second))
 	if err != nil {

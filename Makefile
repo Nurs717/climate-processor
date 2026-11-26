@@ -9,6 +9,8 @@ P ?= 101325
 VM_NAME  ?= climate-vm
 VM_ZONE  ?= us-central1-a
 CLOUD_COMPOSE := docker compose -f deploy/local/docker-compose.cloud.yml
+# Keep in sync with the version in .github/workflows/ci.yml
+GOLANGCI_LINT_VERSION ?= v2.15.0
 
 .DEFAULT_GOAL := help
 .PHONY: help test lint vuln build run up down logs ps send metrics tunnel tunnel-keep cloud-up cloud-down
@@ -19,9 +21,10 @@ help: ## Show this list
 test: ## Run unit tests with the race detector
 	go test -race -cover ./...
 
-lint: ## Check formatting, then run go vet
+lint: ## Check formatting, run go vet and golangci-lint (same version as CI)
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed for:"; gofmt -l .; exit 1)
 	go vet ./...
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 
 vuln: ## Scan dependencies for known vulnerabilities
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
