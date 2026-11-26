@@ -13,7 +13,7 @@ reported no changes and nothing was recreated.
 | `versions.tf` | Terraform and provider versions, the GCS state backend |
 | `variables.tf`, `terraform.tfvars` | project ID, region, zone |
 | `apis.tf` | enabled Google APIs |
-| `network.tf` | the static IP `climate-ip` and the firewall rules (MQTTS on 8883, SSH only from IAP) |
+| `network.tf` | the static IP `climate-ip` and the firewall rules (MQTTS on 8883, HTTP/HTTPS on 80 and 443, SSH only from IAP) |
 | `compute.tf` | the `climate-vm` instance (e2-micro, Ubuntu 24.04, shielded VM) |
 | `iam.tf` | the two service accounts: `climate-vm` (runtime) and `github-deployer` (CD) |
 | `iam_bindings.tf` | their permissions, one binding per resource |

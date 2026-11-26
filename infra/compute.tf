@@ -1,11 +1,11 @@
-# The runtime VM: Mosquitto (MQTTS) + the Go service, started by deploy.sh.
+# The runtime VM: Mosquitto (MQTTS), the Go service and the Caddy reverse proxy, started by deploy.sh.
 # Imported from the live instance; the static IP and the service account are
 # referenced from their own resources instead of being hard-coded.
 resource "google_compute_instance" "climate_vm" {
   name         = "climate-vm"
   machine_type = "e2-micro" # Free Tier eligible in us-central1
   zone         = var.zone
-  tags         = ["mqtt"] # matches the allow-mqtts firewall rule
+  tags         = ["mqtt", "web"] # match the allow-mqtts and allow-web firewall rules
 
   boot_disk {
     auto_delete = true

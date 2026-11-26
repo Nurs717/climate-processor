@@ -10,7 +10,7 @@ resource "google_compute_address" "climate_ip" {
   depends_on = [google_project_service.enabled]
 }
 
-# MQTT over TLS for the sensor, the only port open to the internet.
+# MQTT over TLS for the sensor.
 resource "google_compute_firewall" "allow_mqtts" {
   name          = "allow-mqtts"
   network       = "default"
@@ -21,6 +21,21 @@ resource "google_compute_firewall" "allow_mqtts" {
   allow {
     protocol = "tcp"
     ports    = ["8883"]
+  }
+}
+
+# HTTPS for the Caddy reverse proxy in front of the API. 443 serves the app; 80 answers the Let's Encrypt
+# HTTP-01 challenge and redirects browsers to HTTPS. UDP 443 (HTTP/3) stays closed: browsers fall back to HTTP/2.
+resource "google_compute_firewall" "allow_web" {
+  name          = "allow-web"
+  network       = "default"
+  direction     = "INGRESS"
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["web"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["80", "443"]
   }
 }
 
