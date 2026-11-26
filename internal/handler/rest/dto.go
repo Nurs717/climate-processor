@@ -25,7 +25,7 @@ func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
 type latestDTO struct {
 	DeviceID    string    `json:"device_id"`
-	Time        time.Time `json:"time"`        // when the reading was received
+	Time        time.Time `json:"time"`        // when the reading was received, in whole seconds like the history
 	AgeSeconds  int64     `json:"age_seconds"` // how old it is now
 	Stale       bool      `json:"stale"`       // the sensor has been silent longer than STALE_AFTER
 	Temperature float64   `json:"temperature_c"`
@@ -36,7 +36,7 @@ type latestDTO struct {
 func newLatest(l service.LatestReading) latestDTO {
 	return latestDTO{
 		DeviceID:    l.DeviceID,
-		Time:        l.Timestamp.UTC(),
+		Time:        l.Timestamp.UTC().Truncate(time.Second),
 		AgeSeconds:  int64(l.Age.Seconds()),
 		Stale:       l.Stale,
 		Temperature: l.Temperature,
