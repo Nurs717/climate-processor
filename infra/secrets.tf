@@ -5,6 +5,8 @@ locals {
     "climate-mqtt-password",
     "climate-telegram-bot-token",
     "climate-telegram-admin-chat-ids",
+    # Client secret of "Log In With Telegram" (the owner sign-in).
+    "climate-telegram-oidc-client-secret",
   ]
 }
 

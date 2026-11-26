@@ -67,6 +67,13 @@ services:
       # Caddy reaches the API from the private Docker network and puts the real client address into X-Forwarded-For.
       # Only these ranges are believed, so a client cannot choose its own address (and escape the rate limit).
       TRUSTED_PROXIES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      # Owner sign-in with Telegram ("Log In With Telegram", see README, "Owner sign-in"). PUBLIC_URL is the address of the
+      # service as the browser sees it: keep it in step with SITE_ADDRESS of Caddy below. PUBLIC_URL plus
+      # /api/v1/auth/telegram/callback is registered as a Redirect URI in @BotFather.
+      PUBLIC_URL: https://34-28-22-93.sslip.io
+      TELEGRAM_OIDC_CLIENT_ID: "8835632852" # the bot id from @BotFather; not a secret
+      TELEGRAM_OIDC_CLIENT_SECRET: ${TELEGRAM_OIDC_CLIENT_SECRET:-} # from Secret Manager (scripts/deploy.sh); empty = sign-in off
+      SESSION_TTL: 720h # how long the owner stays signed in
     volumes:
       - ./certs/ca.crt:/certs/ca.crt:ro
       - climate-data:/data
@@ -88,6 +95,7 @@ services:
       # The public host name used by ./caddy/Caddyfile. sslip.io answers with the IP address written in the name,
       # so a valid certificate needs no purchased domain. For your own domain point its A record to the VM's
       # static IP, change this value and push (see README, "Public HTTPS").
+      # Change PUBLIC_URL of climate-app together with it.
       SITE_ADDRESS: 34-28-22-93.sslip.io
     ports:
       - "80:80" # the Let's Encrypt HTTP-01 challenge and the redirect to HTTPS

@@ -11,12 +11,13 @@ cd "$(dirname "$0")/.."
 gcloud auth configure-docker "${IMAGE%%/*}" --quiet
 
 # .env is rebuilt on every deploy: the image tag (so a manual `docker compose up -d` starts the same version)
-# plus the application secrets from Secret Manager. The VM's service account may read exactly these three
+# plus the application secrets from Secret Manager. The VM's service account may read exactly these four
 # secrets. To rotate one, add a new secret version and deploy again; nothing is edited on the VM by hand.
 SECRETS=(
   MQTT_PASSWORD=climate-mqtt-password
   TELEGRAM_BOT_TOKEN=climate-telegram-bot-token
   TELEGRAM_ADMIN_CHAT_IDS=climate-telegram-admin-chat-ids
+  TELEGRAM_OIDC_CLIENT_SECRET=climate-telegram-oidc-client-secret
 )
 
 umask 077

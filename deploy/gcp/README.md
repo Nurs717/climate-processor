@@ -65,7 +65,7 @@ gcloud services enable artifactregistry.googleapis.com iamcredentials.googleapis
 gcloud artifacts repositories create climate --repository-format=docker --location=us-central1
 
 # The VM runs as its own least-privilege service account (attached to the VM in step 5):
-# it may read the images and three secrets, nothing else
+# it may read the images and four secrets, nothing else
 PROJECT_ID=$(gcloud config get-value project)
 gcloud iam service-accounts create climate-vm --display-name="climate-vm runtime"
 VM_SA="climate-vm@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -107,7 +107,7 @@ Then set the six GitHub Variables listed above (`gh variable set NAME --repo <ow
 
 ### 4. Secrets on the VM
 
-Nothing secret is committed. The CA, the broker certificate and the MQTT password file are created on the VM (`certs/`, `mosquitto/passwd`); the three application secrets move to Secret Manager in step 5. On the VM, once:
+Nothing secret is committed. The CA, the broker certificate and the MQTT password file are created on the VM (`certs/`, `mosquitto/passwd`); the application secrets move to Secret Manager in step 5. On the VM, once:
 
 ```bash
 git clone https://github.com/<owner>/<repo>.git /tmp/climate-src
@@ -126,7 +126,7 @@ sudo shred -u /opt/climate/certs/ca.key && rm ~/ca.key ~/ca.crt
 
 ### 5. Secret Manager and the VM's service account
 
-The Telegram token, the MQTT password of the service and the admin chat IDs live in Secret Manager. `deploy.sh` copies them into `.env` on every deploy. The VM runs as its own service account, which can read exactly these three secrets and the images, and nothing else.
+The Telegram token, the MQTT password of the service, the admin chat IDs and the client secret of the Telegram sign-in live in Secret Manager. `deploy.sh` copies them into `.env` on every deploy. The VM runs as its own service account, which can read exactly these four secrets and the images, and nothing else.
 
 If Terraform has already created the secrets (`infra/secrets.tf`), `gcloud secrets create` below would fail: add the values with `gcloud secrets versions add <name> --data-file=-` instead.
 
@@ -134,6 +134,7 @@ If Terraform has already created the secrets (`infra/secrets.tf`), `gcloud secre
 gcloud services enable secretmanager.googleapis.com
 
 # Copy the three values from the VM's .env into Secret Manager. They travel through a pipe and never appear on screen.
+# The fourth secret, climate-telegram-oidc-client-secret, is not in the VM's .env: see "Owner sign-in (Telegram)".
 for pair in climate-mqtt-password:MQTT_PASSWORD climate-telegram-bot-token:TELEGRAM_BOT_TOKEN climate-telegram-admin-chat-ids:TELEGRAM_ADMIN_CHAT_IDS; do
   secret=${pair%%:*}; key=${pair##*:}
   gcloud compute ssh climate-vm --zone=us-central1-a --tunnel-through-iap --quiet \
@@ -180,7 +181,8 @@ redirects HTTP to HTTPS and proxies everything to the API port of the service (`
 The public name is `SITE_ADDRESS` in `docker-compose.yml`. It starts as `34-28-22-93.sslip.io`: sslip.io is a free DNS service
 that answers with the IP address written in the name, so a valid certificate needs no purchased domain.
 To switch to your own domain, create an `A` record that points to the VM's static IP, change `SITE_ADDRESS` and push:
-the pipeline redeploys and Caddy obtains a new certificate.
+the pipeline redeploys and Caddy obtains a new certificate. Change `PUBLIC_URL` of `climate-app` (same file) together with it, and register the new
+Redirect URI in @BotFather (see "Owner sign-in").
 
 Certificates and the ACME account live in the `caddy-data` volume and survive deployments. Do not delete the volume:
 Let's Encrypt allows only a few new certificates per host name per week.
@@ -208,6 +210,55 @@ so they survive deployments. Admins manage the list in the bot with `/users` and
 
 To make yourself the first admin, send `/start` to the bot while the variable is empty: it replies with your chat ID.
 Add it as a new version of that secret and run the CD workflow again. (Older setups used `TELEGRAM_ALLOWED_CHAT_IDS`; it is no longer read.)
+
+## Owner sign-in (Telegram)
+
+Everybody can read the data without signing in: an anonymous client has the read-only `demo` role. The owner signs in with
+Telegram to get higher limits and, later, the private features. The service uses "Log In With Telegram" (OpenID Connect):
+Telegram confirms who the user is, and the service lets in only the admins from `TELEGRAM_ADMIN_CHAT_IDS`.
+A sign-in is an opaque session token in an `HttpOnly` cookie (or an `Authorization: Bearer` header for apps). The database keeps only
+its hash, so a leaked database cannot be used to sign in, and a session can be ended at any time: by signing out or by removing the admin.
+
+| Setting | Where | Meaning |
+|---|---|---|
+| `PUBLIC_URL` | `docker-compose.yml` | the address of the service as the browser sees it, no path; `https` only (plain `http` only for `localhost`) |
+| `TELEGRAM_OIDC_CLIENT_ID` | `docker-compose.yml` | the bot id from @BotFather; not a secret |
+| `TELEGRAM_OIDC_CLIENT_SECRET` | Secret Manager `climate-telegram-oidc-client-secret` | the client secret; never in git |
+| `SESSION_TTL` | `docker-compose.yml` | how long a sign-in lasts (default and current value: `720h`, 30 days) |
+
+The sign-in is on only when all of these and `DB_PATH` (the sessions live in the database) are set. Otherwise the service logs why it is off
+and keeps working with everybody anonymous.
+
+Setup, once:
+
+1. In @BotFather open the mini app (the **Open** button), choose the bot, **Login Widget**, then **Switch to OpenID Connect Login**.
+2. Add the Redirect URI `https://<SITE_ADDRESS>/api/v1/auth/telegram/callback`. It must match character for character
+   the `redirect_uri` that the service writes to its log at start ("owner sign-in is on").
+3. Create the secret container and give the VM access to it with Terraform (`infra/`):
+   ```bash
+   cd infra && terraform plan -out=tfplan   # 2 to add (the secret and the VM's access to it), 0 to change, 0 to destroy
+   terraform apply tfplan && rm tfplan
+   ```
+4. Add the Client Secret from the same BotFather screen as the secret's value. It travels through a pipe, never through a file or a chat:
+   ```bash
+   gcloud secrets versions add climate-telegram-oidc-client-secret --data-file=-   # paste the value, then Ctrl+D (not Enter)
+   ```
+   If the secret was ever exposed, revoke it in BotFather and add the new one the same way.
+5. Push, or run the CD workflow. The log of `climate-app` must contain `owner sign-in is on`.
+
+Do the steps in this order: `deploy.sh` refuses to restart anything when a secret has no value, so the container and its value must exist
+before the deploy that reads them.
+
+Check:
+
+```bash
+curl -s https://<SITE_ADDRESS>/api/v1/auth/me      # {"role":"demo","sign_in_enabled":true}
+```
+
+Then open `https://<SITE_ADDRESS>/api/v1/auth/telegram/login` in a browser and confirm in Telegram. You land on `/`, which is a JSON 404 until the
+web app exists; that is expected. Open `/api/v1/auth/me`: it must now say `"role":"owner"`.
+An account that is not an admin gets `403`, and the service logs a warning with its Telegram id.
+To sign out, send `POST /api/v1/auth/logout` (for example `fetch('/api/v1/auth/logout', {method: 'POST'})` in the browser console).
 
 ## Check without hardware
 

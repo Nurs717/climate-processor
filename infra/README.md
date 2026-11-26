@@ -19,7 +19,7 @@ reported no changes and nothing was recreated.
 | `iam_bindings.tf` | their permissions, one binding per resource |
 | `wif.tf` | Workload Identity pool and provider for GitHub, limited to this repository on `main` |
 | `registry.tf` | Artifact Registry repository with a cleanup policy (keeps the 5 newest versions) |
-| `secrets.tf` | the three Secret Manager secrets, **without values** |
+| `secrets.tf` | the four Secret Manager secrets, **without values** |
 
 Not in Terraform, on purpose:
 
