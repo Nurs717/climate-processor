@@ -1,24 +1,57 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"climate-processor/internal/domain"
 	"climate-processor/internal/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 const validPayload = `{"temperature":21.5,"humidity":45.2,"pressure":101325}`
 
-// newTestService returns a service with a controllable clock (UTC+5 for display).
+// fakeRepo is an in-memory ReadingRepository; err, when set, makes every Save fail.
+type fakeRepo struct {
+	saved []domain.ClimateData
+	err   error
+}
+
+func (f *fakeRepo) Save(_ context.Context, d domain.ClimateData) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.saved = append(f.saved, d)
+	return nil
+}
+
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	return m.GetCounter().GetValue()
+}
+
+// newTestService returns a service that does not store readings.
 func newTestService(t *testing.T) (*ClimateService, *time.Time) {
+	t.Helper()
+	return newTestServiceWithRepo(t, NopRepository{})
+}
+
+// newTestServiceWithRepo returns a service with a controllable clock (UTC+5 for display).
+func newTestServiceWithRepo(t *testing.T, repo ReadingRepository) (*ClimateService, *time.Time) {
 	t.Helper()
 	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
 	s := NewClimateService(
 		metrics.NewClimateMetrics(prometheus.NewRegistry()),
+		repo,
 		Options{
 			Location:   time.FixedZone("UTC+5", 5*60*60),
 			StaleAfter: 5 * time.Minute,
@@ -71,6 +104,47 @@ func TestProcessMessageRejectsInvalid(t *testing.T) {
 				t.Errorf("rejected message must not be stored, status:\n%s", got)
 			}
 		})
+	}
+}
+
+func TestProcessMessageStoresReading(t *testing.T) {
+	repo := &fakeRepo{}
+	s, now := newTestServiceWithRepo(t, repo)
+
+	if err := s.ProcessMessage([]byte(validPayload)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := domain.ClimateData{DeviceID: "room", Temperature: 21.5, Humidity: 45.2, Pressure: 101325, Timestamp: *now}
+	if len(repo.saved) != 1 || repo.saved[0] != want {
+		t.Fatalf("saved = %+v, want [%+v]", repo.saved, want)
+	}
+}
+
+func TestRejectedMessageIsNotStored(t *testing.T) {
+	repo := &fakeRepo{}
+	s, _ := newTestServiceWithRepo(t, repo)
+
+	if err := s.ProcessMessage([]byte(`{"temperature":120,"humidity":45,"pressure":101325}`)); !errors.Is(err, ErrInvalidPayload) {
+		t.Fatalf("expected ErrInvalidPayload, got %v", err)
+	}
+	if len(repo.saved) != 0 {
+		t.Errorf("rejected message must not be stored, got %+v", repo.saved)
+	}
+}
+
+func TestStorageFailureDoesNotRejectReading(t *testing.T) {
+	repo := &fakeRepo{err: errors.New("disk is full")}
+	s, _ := newTestServiceWithRepo(t, repo)
+
+	if err := s.ProcessMessage([]byte(validPayload)); err != nil {
+		t.Fatalf("a storage failure must not reject the reading, got %v", err)
+	}
+	if got := s.GetCurrentStatus(); !strings.Contains(got, "21.5 °C") {
+		t.Errorf("reading must still be served to the bot:\n%s", got)
+	}
+	if got := counterValue(t, s.metrics.StoreErrors); got != 1 {
+		t.Errorf("StoreErrors = %v, want 1", got)
 	}
 }
 

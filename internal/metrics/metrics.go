@@ -15,6 +15,8 @@ type ClimateMetrics struct {
 	LastUpdate prometheus.Gauge
 	// Rejected counts discarded messages by reason: parse, missing_field, out_of_range.
 	Rejected *prometheus.CounterVec
+	// StoreErrors counts readings that could not be written to the database.
+	StoreErrors prometheus.Counter
 }
 
 // NewClimateMetrics registers the metrics in reg (use prometheus.DefaultRegisterer in the app,
@@ -42,5 +44,9 @@ func NewClimateMetrics(reg prometheus.Registerer) *ClimateMetrics {
 			Name: "climate_messages_rejected_total",
 			Help: "Discarded MQTT messages by reason",
 		}, []string{"reason"}),
+		StoreErrors: f.NewCounter(prometheus.CounterOpts{
+			Name: "climate_store_errors_total",
+			Help: "Failed attempts to store a reading",
+		}),
 	}
 }

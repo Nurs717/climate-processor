@@ -12,6 +12,7 @@ type Payload struct {
 
 // ClimateData is a validated reading, stamped with the backend receive time.
 type ClimateData struct {
+	DeviceID    string // which sensor produced the reading
 	Temperature float64
 	Humidity    float64
 	Pressure    float64

@@ -23,6 +23,8 @@ const (
 	maxPressurePa = 110000.0
 
 	defaultStaleAfter = 5 * time.Minute
+	defaultDeviceID   = "room"
+	saveTimeout       = 2 * time.Second // upper bound for one database write
 	paToMmHg          = 0.00750062
 )
 
@@ -33,11 +35,14 @@ var ErrInvalidPayload = errors.New("invalid payload")
 type Options struct {
 	Location   *time.Location   // used to format times for the user (default UTC)
 	StaleAfter time.Duration    // data older than this is reported as stale (default 5m)
+	DeviceID   string           // id stored with every reading (default "room")
 	Now        func() time.Time // clock, replaced in tests (default time.Now)
 }
 
 type ClimateService struct {
 	metrics    *metrics.ClimateMetrics // Metrics layer
+	repo       ReadingRepository       // History storage
+	deviceID   string
 	loc        *time.Location
 	staleAfter time.Duration
 	now        func() time.Time
@@ -49,8 +54,15 @@ type ClimateService struct {
 	offline     bool // true after a "no data" notification was produced
 }
 
-// Metrics are injected via the constructor
-func NewClimateService(m *metrics.ClimateMetrics, opts Options) *ClimateService {
+// Dependencies (metrics, repository) are injected via the constructor.
+// A nil repo disables storing readings.
+func NewClimateService(m *metrics.ClimateMetrics, repo ReadingRepository, opts Options) *ClimateService {
+	if repo == nil {
+		repo = NopRepository{}
+	}
+	if opts.DeviceID == "" {
+		opts.DeviceID = defaultDeviceID
+	}
 	if opts.Location == nil {
 		opts.Location = time.UTC
 	}
@@ -62,6 +74,8 @@ func NewClimateService(m *metrics.ClimateMetrics, opts Options) *ClimateService 
 	}
 	return &ClimateService{
 		metrics:    m,
+		repo:       repo,
+		deviceID:   opts.DeviceID,
 		loc:        opts.Location,
 		staleAfter: opts.StaleAfter,
 		now:        opts.Now,
@@ -93,7 +107,7 @@ func (s *ClimateService) ProcessMessage(payload []byte) error {
 	}
 
 	now := s.now()
-	data := domain.ClimateData{Temperature: t, Humidity: h, Pressure: pr, Timestamp: now}
+	data := domain.ClimateData{DeviceID: s.deviceID, Temperature: t, Humidity: h, Pressure: pr, Timestamp: now}
 
 	// Store the state for the Telegram bot
 	s.mu.Lock()
@@ -107,8 +121,21 @@ func (s *ClimateService) ProcessMessage(payload []byte) error {
 	s.metrics.Pressure.Set(pr)
 	s.metrics.LastUpdate.Set(float64(now.Unix()))
 
+	s.save(data)
+
 	log.Printf("[METRICS] Updated in Prometheus -> T: %.2f °C, H: %.2f%%", t, h)
 	return nil
+}
+
+// save persists a reading. A storage failure must not reject a valid reading:
+// the bot and Prometheus keep working, the failure is logged and counted.
+func (s *ClimateService) save(d domain.ClimateData) {
+	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	defer cancel()
+	if err := s.repo.Save(ctx, d); err != nil {
+		s.metrics.StoreErrors.Inc()
+		log.Printf("[ERROR] Failed to store reading: %v", err)
+	}
 }
 
 // GetCurrentStatus formats the data for sending to Telegram

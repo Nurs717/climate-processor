@@ -15,6 +15,7 @@ import (
 	"climate-processor/internal/config"
 	"climate-processor/internal/handler"
 	"climate-processor/internal/metrics"
+	"climate-processor/internal/repository/sqlite"
 	"climate-processor/internal/service"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -40,10 +41,23 @@ func main() {
 	// 1. Initialize metrics
 	climateMetrics := metrics.NewClimateMetrics(prometheus.DefaultRegisterer)
 
-	// 2. Initialize the service and inject metrics into it
-	climateService := service.NewClimateService(climateMetrics, service.Options{
+	// 2. Reading history (optional)
+	repo, closeRepo, err := openRepository(ctx, cfg.DBPath)
+	if err != nil {
+		log.Fatalf("[FATAL] Storage error: %v", err)
+	}
+	// Registered before the MQTT disconnect, so the database is closed after the last message is handled.
+	defer func() {
+		if err := closeRepo(); err != nil {
+			log.Printf("[WARN] Closing the database: %v", err)
+		}
+	}()
+
+	// 3. The service gets its dependencies through the constructor
+	climateService := service.NewClimateService(climateMetrics, repo, service.Options{
 		Location:   loc,
 		StaleAfter: cfg.StaleAfter,
+		DeviceID:   cfg.DeviceID,
 	})
 
 	mqttHandler, err := handler.NewMQTTHandler(handler.MQTTConfig{
@@ -87,7 +101,7 @@ func main() {
 		climateService.WatchStaleness(ctx, 30*time.Second, notify)
 	})
 
-	// === 3. START THE HTTP SERVER (Prometheus metrics + health check) ===
+	// === 4. START THE HTTP SERVER (Prometheus metrics + health check) ===
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -121,6 +135,21 @@ func main() {
 		log.Printf("[WARN] HTTP server shutdown: %v", err)
 	}
 	waitTimeout(&wg, 5*time.Second)
+}
+
+// openRepository returns the reading storage and a function that closes it.
+// Without a path readings are dropped (NopRepository).
+func openRepository(ctx context.Context, path string) (service.ReadingRepository, func() error, error) {
+	if path == "" {
+		log.Println("[WARN] DB_PATH is not set: readings are not stored.")
+		return service.NopRepository{}, func() error { return nil }, nil
+	}
+	r, err := sqlite.New(ctx, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	log.Printf("[INFO] Readings are stored in %s", path)
+	return r, r.Close, nil
 }
 
 // waitTimeout waits for wg, but not longer than d.

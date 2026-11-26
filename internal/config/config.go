@@ -28,6 +28,11 @@ type Config struct {
 	// File where users approved in the bot are stored (JSON). Empty = kept in memory, lost on restart.
 	AccessFile string
 
+	// SQLite file with the reading history. Empty = history is not stored (only the latest reading lives in memory).
+	DBPath string
+	// Id stored with every reading; lets one database hold several sensors.
+	DeviceID string
+
 	Timezone   string        // IANA name used when formatting time in messages
 	StaleAfter time.Duration // how long without readings until the data is considered stale
 }
@@ -49,6 +54,9 @@ func Load() *Config {
 		TGToken:      getEnv("TELEGRAM_BOT_TOKEN", ""),
 		AdminChatIDs: parseChatIDs(getEnv("TELEGRAM_ADMIN_CHAT_IDS", "")),
 		AccessFile:   getEnv("ACCESS_FILE", ""),
+
+		DBPath:   getEnv("DB_PATH", ""),
+		DeviceID: getEnv("DEVICE_ID", "room"),
 
 		Timezone:   getEnv("TIMEZONE", "Asia/Almaty"),
 		StaleAfter: getEnvDuration("STALE_AFTER", 5*time.Minute),
