@@ -16,6 +16,7 @@ import (
 	"climate-processor/internal/access"
 	"climate-processor/internal/config"
 	"climate-processor/internal/handler"
+	"climate-processor/internal/handler/rest"
 	"climate-processor/internal/logger"
 	"climate-processor/internal/metrics"
 	"climate-processor/internal/repository/sqlite"
@@ -128,28 +129,24 @@ func run(log *slog.Logger, cfg *config.Config) error {
 		climateService.WatchStaleness(ctx, 30*time.Second, notify)
 	})
 
-	// === 4. START THE HTTP SERVER (Prometheus metrics + health check) ===
+	// === 4. START THE HTTP SERVERS ===
+	// Internal server: Prometheus metrics and the health check. It must never be exposed to the internet.
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	srv := &http.Server{
-		Addr:              cfg.MetricsPort,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+	internalSrv := newHTTPServer(cfg.MetricsPort, mux)
+	servers := []*http.Server{internalSrv}
+	startHTTPServer(log, internalSrv, "/metrics, /healthz", stop)
+
+	// REST API for the apps (the PWA, ...). An empty HTTP_ADDR disables it.
+	if cfg.HTTPAddr != "" {
+		apiSrv := newHTTPServer(cfg.HTTPAddr, rest.NewRouter(log.With("component", "rest"), climateService, rest.Options{}))
+		servers = append(servers, apiSrv)
+		startHTTPServer(log, apiSrv, "/api/v1/*", stop)
 	}
-	go func() {
-		log.Info("HTTP server started", "addr", cfg.MetricsPort, "endpoints", "/metrics, /healthz")
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("HTTP server failed", "error", err)
-			stop() // trigger a graceful shutdown
-		}
-	}()
 
 	log.Info("worker started, press Ctrl+C to exit")
 
@@ -158,11 +155,36 @@ func run(log *slog.Logger, cfg *config.Config) error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Warn("HTTP server shutdown failed", "error", err)
+	for _, srv := range servers {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Warn("HTTP server shutdown failed", "addr", srv.Addr, "error", err)
+		}
 	}
 	waitTimeout(log, &wg, 5*time.Second)
 	return nil
+}
+
+// newHTTPServer returns a server with timeouts that protect it from slow clients.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
+// startHTTPServer serves srv in the background. A failure other than a normal shutdown stops the whole service.
+func startHTTPServer(log *slog.Logger, srv *http.Server, endpoints string, stop func()) {
+	go func() {
+		log.Info("HTTP server started", "addr", srv.Addr, "endpoints", endpoints)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("HTTP server failed", "addr", srv.Addr, "error", err)
+			stop() // trigger a graceful shutdown
+		}
+	}()
 }
 
 // openRepository returns the reading storage and a function that closes it.

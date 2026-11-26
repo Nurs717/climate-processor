@@ -19,7 +19,9 @@ type Config struct {
 	MQTTCAFile        string // PEM file with the CA that signed the broker certificate
 	MQTTTLSServerName string // name expected in the broker certificate (SAN)
 
-	MetricsPort string // listen address of the HTTP server, e.g. ":2112"
+	MetricsPort string // listen address of the internal HTTP server (/metrics, /healthz), e.g. ":2112"
+	// Listen address of the REST API (internal/handler/rest), e.g. ":8080". Empty = the API is disabled.
+	HTTPAddr string
 
 	TGToken string
 	// Telegram chat IDs of the administrators: they always have access and approve or remove other users
@@ -53,6 +55,7 @@ func Load() *Config {
 		MQTTTLSServerName: getEnv("MQTT_TLS_SERVER_NAME", ""),
 
 		MetricsPort: getEnv("METRICS_PORT", ":2112"),
+		HTTPAddr:    getEnv("HTTP_ADDR", ":8080"),
 
 		TGToken:      getEnv("TELEGRAM_BOT_TOKEN", ""),
 		AdminChatIDs: parseChatIDs(getEnv("TELEGRAM_ADMIN_CHAT_IDS", "")),

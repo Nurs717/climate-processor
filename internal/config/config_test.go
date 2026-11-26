@@ -98,3 +98,27 @@ func TestLoadLogDefaults(t *testing.T) {
 		t.Errorf("defaults = %q, %q; want info, json", cfg.LogLevel, cfg.LogFormat)
 	}
 }
+
+func TestLoadHTTPAddr(t *testing.T) {
+	t.Setenv("HTTP_ADDR", "127.0.0.1:9000")
+	if got := Load().HTTPAddr; got != "127.0.0.1:9000" {
+		t.Errorf("HTTPAddr = %q", got)
+	}
+
+	// An explicitly empty value disables the API; only an absent variable selects the default.
+	t.Setenv("HTTP_ADDR", "")
+	if got := Load().HTTPAddr; got != "" {
+		t.Errorf("empty HTTP_ADDR must disable the API, got %q", got)
+	}
+}
+
+func TestLoadHTTPAddrDefault(t *testing.T) {
+	t.Setenv("HTTP_ADDR", "") // restored after the test; Unsetenv makes the variable absent meanwhile
+	if err := os.Unsetenv("HTTP_ADDR"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := Load().HTTPAddr; got != ":8080" {
+		t.Errorf("default HTTPAddr = %q, want :8080", got)
+	}
+}
