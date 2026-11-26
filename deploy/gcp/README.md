@@ -1,7 +1,7 @@
 # Running on Google Cloud (e2-micro, Always Free)
 
-Layout: ESP32 → `mqtts://<IP>:8883` (Mosquitto, TLS + username/password) → Go service → Telegram bot.
-One small VM runs the broker and the service. Prometheus/Grafana are not deployed (1 GB RAM); metrics are available on `127.0.0.1:2112` of the VM itself.
+Layout: ESP32 → `mqtts://<IP>:8883` (Mosquitto, TLS + username/password) → Go service → Telegram bot and REST API (behind Caddy, HTTPS).
+One small VM runs the broker, the service and Caddy. Prometheus/Grafana are not deployed (1 GB RAM); metrics are available on `127.0.0.1:2112` of the VM itself.
 
 > This page is about the cloud deployment. To run everything locally with one command (no cloud needed), see the [Quick start in the root README](../../README.md#quick-start-local-one-command).
 
@@ -35,10 +35,11 @@ Run these in Cloud Shell (or any shell with `gcloud`). Replace the placeholders.
 gcloud compute instances create climate-vm \
   --zone=us-central1-a --machine-type=e2-micro \
   --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
-  --boot-disk-size=30GB --boot-disk-type=pd-standard --tags=mqtt
+  --boot-disk-size=30GB --boot-disk-type=pd-standard --tags=mqtt,web
 
-# MQTT over TLS for the sensor; SSH only from Google's IAP range
+# MQTT over TLS for the sensor; HTTP(S) for Caddy; SSH only from Google's IAP range
 gcloud compute firewall-rules create allow-mqtts --allow=tcp:8883 --target-tags=mqtt
+gcloud compute firewall-rules create allow-web --allow=tcp:80,tcp:443 --target-tags=web
 gcloud compute firewall-rules create allow-iap-ssh --network=default --direction=INGRESS \
   --action=ALLOW --rules=tcp:22 --source-ranges=35.235.240.0/20
 ```
@@ -169,6 +170,29 @@ After editing `mosquitto/acl` or `mosquitto/passwd` run `sudo docker compose up 
 File ownership needs no manual work: the one-shot `mosquitto-init` service copies the config, ACL, password file and keys into a volume owned by uid 1883 (the broker user) on every `docker compose up`.
 
 The broker certificate is valid for 825 days from the day `gen-secrets.sh` ran. To renew it you need the CA key you stored off the VM.
+
+## Public HTTPS (Caddy)
+
+Caddy listens on ports 80 and 443 (the `allow-web` firewall rule), gets a Let's Encrypt certificate by itself, renews it,
+redirects HTTP to HTTPS and proxies everything to the API port of the service (`climate-app:8080`).
+`/metrics` and `/healthz` are on another port that is never published to the internet.
+
+The public name is `SITE_ADDRESS` in `docker-compose.yml`. It starts as `34-28-22-93.sslip.io`: sslip.io is a free DNS service
+that answers with the IP address written in the name, so a valid certificate needs no purchased domain.
+To switch to your own domain, create an `A` record that points to the VM's static IP, change `SITE_ADDRESS` and push:
+the pipeline redeploys and Caddy obtains a new certificate.
+
+Certificates and the ACME account live in the `caddy-data` volume and survive deployments. Do not delete the volume:
+Let's Encrypt allows only a few new certificates per host name per week.
+
+The deploy script waits only for the service to become healthy, not for Caddy. Check HTTPS after a deployment:
+
+```bash
+curl -s https://<SITE_ADDRESS>/api/v1/latest             # from anywhere
+cd /opt/climate && sudo docker compose logs caddy         # on the VM, look for "certificate obtained successfully"
+```
+
+If it does not work: the DNS name must resolve to the VM's IP, the `allow-web` rule must exist and the VM must have the `web` tag.
 
 ## Who may use the bot
 
