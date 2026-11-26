@@ -64,18 +64,32 @@ type testEnv struct {
 	logs   *bytes.Buffer
 }
 
-func newTestEnv(t *testing.T) *testEnv {
+// newTestEnv builds a router on a fake reader and a fixed clock; tweaks change the options before the build.
+func newTestEnv(t *testing.T, tweaks ...func(*Options)) *testEnv {
 	t.Helper()
 	logs := &bytes.Buffer{}
 	reader := &fakeReader{}
-	router := NewRouter(logger.New(logs, slog.LevelDebug, logger.FormatJSON), reader, Options{
-		Now: func() time.Time { return testNow },
-	})
+	opts := Options{Now: func() time.Time { return testNow }}
+	for _, tweak := range tweaks {
+		tweak(&opts)
+	}
+	router, err := NewRouter(logger.New(logs, slog.LevelDebug, logger.FormatJSON), reader, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &testEnv{router: router, reader: reader, logs: logs}
 }
 
 func (e *testEnv) get(target string, headers ...string) *httptest.ResponseRecorder {
+	return e.getFrom("", target, headers...)
+}
+
+// getFrom is get with a chosen peer address ("host:port"); empty keeps the httptest default (192.0.2.1).
+func (e *testEnv) getFrom(peer, target string, headers ...string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, target, nil)
+	if peer != "" {
+		req.RemoteAddr = peer
+	}
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
 	}

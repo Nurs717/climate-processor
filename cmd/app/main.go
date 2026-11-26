@@ -19,6 +19,7 @@ import (
 	"climate-processor/internal/handler/rest"
 	"climate-processor/internal/logger"
 	"climate-processor/internal/metrics"
+	"climate-processor/internal/ratelimit"
 	"climate-processor/internal/repository/sqlite"
 	"climate-processor/internal/service"
 
@@ -143,7 +144,10 @@ func run(log *slog.Logger, cfg *config.Config) error {
 
 	// REST API for the apps (the PWA, ...). An empty HTTP_ADDR disables it.
 	if cfg.HTTPAddr != "" {
-		apiSrv := newHTTPServer(cfg.HTTPAddr, rest.NewRouter(log.With("component", "rest"), climateService, rest.Options{}))
+		apiSrv, err := newAPIServer(log, cfg, climateService)
+		if err != nil {
+			return err
+		}
 		servers = append(servers, apiSrv)
 		startHTTPServer(log, apiSrv, "/api/v1/*", stop)
 	}
@@ -162,6 +166,34 @@ func run(log *slog.Logger, cfg *config.Config) error {
 	}
 	waitTimeout(log, &wg, 5*time.Second)
 	return nil
+}
+
+// maxTrackedClients bounds the memory of the rate limiter: it remembers at most this many client addresses.
+const maxTrackedClients = 10_000
+
+// newAPIServer builds the public REST API server: its trusted proxies (to find the real client address) and
+// the per-client rate limit both come from the configuration.
+func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader) (*http.Server, error) {
+	opts := rest.Options{TrustedProxies: cfg.TrustedProxies}
+	if cfg.APIRatePerMin > 0 {
+		limiter, err := ratelimit.New(cfg.APIRatePerMin, cfg.APIRateBurst, maxTrackedClients)
+		if err != nil {
+			return nil, fmt.Errorf("rate limiter: %w", err)
+		}
+		opts.Limiter = limiter // assigned only here: a nil *Limiter in the interface would not be "no limit"
+	} else {
+		log.Warn("API_RATE_PER_MIN is 0: the API is not rate limited")
+	}
+	log.Info("REST API settings",
+		"trusted_proxies", cfg.TrustedProxies,
+		"rate_per_minute", cfg.APIRatePerMin,
+		"rate_burst", cfg.APIRateBurst)
+
+	router, err := rest.NewRouter(log.With("component", "rest"), reader, opts)
+	if err != nil {
+		return nil, fmt.Errorf("REST API: %w", err)
+	}
+	return newHTTPServer(cfg.HTTPAddr, router), nil
 }
 
 // newHTTPServer returns a server with timeouts that protect it from slow clients.

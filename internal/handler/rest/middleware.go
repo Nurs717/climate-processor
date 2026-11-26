@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
 	"runtime/debug"
@@ -86,6 +87,35 @@ func recovery(log *slog.Logger) gin.HandlerFunc {
 			"panic", recovered, "stack", string(debug.Stack()))
 		renderError(c, apperr.New(apperr.CodeUnknown, "rest.recovery", "internal error"))
 	})
+}
+
+// Costs of a request for the rate limiter. The latest value is cheap; a query that aggregates the stored
+// history keeps the database busy for a while, so it counts as several requests.
+const (
+	costCheap   = 1
+	costHistory = 5
+)
+
+// rateLimit answers 429 with a Retry-After header when the client of the request has used up its tokens.
+// The client is c.ClientIP(), which honours X-Forwarded-For only from trusted proxies. A nil limiter lets
+// every request through.
+func rateLimit(l Limiter, now func() time.Time, cost int) gin.HandlerFunc {
+	if l == nil {
+		return func(*gin.Context) {}
+	}
+	return func(c *gin.Context) {
+		ok, wait := l.Allow(c.ClientIP(), cost, now())
+		if ok {
+			return
+		}
+		c.Header("Retry-After", strconv.Itoa(retryAfterSeconds(wait)))
+		renderError(c, apperr.New(apperr.CodeTooManyRequests, "rest.rateLimit", "too many requests, retry later"))
+	}
+}
+
+// retryAfterSeconds rounds the wait up to whole seconds, the unit of the Retry-After header, and never gives 0.
+func retryAfterSeconds(d time.Duration) int {
+	return max(1, int(math.Ceil(d.Seconds())))
 }
 
 // noStore keeps browsers and service workers from serving a stale reading from their cache.
