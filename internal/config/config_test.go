@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -68,5 +69,32 @@ func TestGetEnvDuration(t *testing.T) {
 	t.Setenv(key, "-1m")
 	if got := getEnvDuration(key, fallback); got != fallback {
 		t.Errorf("non-positive value should fall back, got %s", got)
+	}
+}
+
+func TestLoadLogSettings(t *testing.T) {
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("LOG_FORMAT", "text")
+
+	cfg := Load()
+
+	if cfg.LogLevel != "debug" || cfg.LogFormat != "text" {
+		t.Errorf("log settings = %q, %q", cfg.LogLevel, cfg.LogFormat)
+	}
+}
+
+func TestLoadLogDefaults(t *testing.T) {
+	// t.Setenv restores the original values after the test; Unsetenv makes the variables absent meanwhile.
+	for _, key := range []string{"LOG_LEVEL", "LOG_FORMAT"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := Load()
+
+	if cfg.LogLevel != "info" || cfg.LogFormat != "json" {
+		t.Errorf("defaults = %q, %q; want info, json", cfg.LogLevel, cfg.LogFormat)
 	}
 }

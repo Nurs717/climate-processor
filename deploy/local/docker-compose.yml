@@ -23,6 +23,7 @@ services:
       TELEGRAM_ADMIN_CHAT_IDS: ${TELEGRAM_ADMIN_CHAT_IDS:-}
       ACCESS_FILE: /data/access.json
       DB_PATH: /data/climate.db # reading history; the climate-data volume keeps it across deployments
+      LOG_FORMAT: text # readable lines for local development (JSON in the cloud)
       TIMEZONE: Asia/Almaty
       STALE_AFTER: 5m
     volumes:

@@ -1,7 +1,7 @@
 package config
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -35,6 +35,9 @@ type Config struct {
 
 	Timezone   string        // IANA name used when formatting time in messages
 	StaleAfter time.Duration // how long without readings until the data is considered stale
+
+	LogLevel  string // debug, info, warn or error
+	LogFormat string // json (production) or text (readable, for local development)
 }
 
 func Load() *Config {
@@ -60,6 +63,9 @@ func Load() *Config {
 
 		Timezone:   getEnv("TIMEZONE", "Asia/Almaty"),
 		StaleAfter: getEnvDuration("STALE_AFTER", 5*time.Minute),
+
+		LogLevel:  getEnv("LOG_LEVEL", "info"),
+		LogFormat: getEnv("LOG_FORMAT", "json"),
 	}
 }
 
@@ -77,7 +83,7 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil || d <= 0 {
-		log.Printf("[WARN] Invalid %s=%q, using %s", key, value, fallback)
+		slog.Warn("invalid environment variable, using the default", "key", key, "value", value, "default", fallback.String())
 		return fallback
 	}
 	return d
@@ -94,7 +100,7 @@ func parseChatIDs(raw string) []int64 {
 		}
 		id, err := strconv.ParseInt(part, 10, 64)
 		if err != nil {
-			log.Printf("[WARN] Ignoring invalid chat id %q in TELEGRAM_ADMIN_CHAT_IDS", part)
+			slog.Warn("ignoring invalid chat id", "env", "TELEGRAM_ADMIN_CHAT_IDS", "value", part)
 			continue
 		}
 		ids = append(ids, id)

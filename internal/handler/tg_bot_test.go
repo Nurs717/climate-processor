@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -73,6 +74,7 @@ func newTestHandler(t *testing.T, admins ...int64) (*TGHandler, *fakeAPI) {
 	}
 	api := &fakeAPI{}
 	return &TGHandler{
+		log:      slog.New(slog.DiscardHandler),
 		api:      api,
 		username: "ClimateBot",
 		status:   fakeStatus("🌡 21.5 °C"),

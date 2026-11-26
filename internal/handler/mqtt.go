@@ -5,7 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -28,17 +28,22 @@ type MQTTConfig struct {
 }
 
 type MQTTHandler struct {
+	log     *slog.Logger
 	client  mqtt.Client
 	service *service.ClimateService
 	topic   string
 }
 
-func NewMQTTHandler(cfg MQTTConfig, svc *service.ClimateService) (*MQTTHandler, error) {
-	// Make the paho library report connection problems (wrong password, TLS errors, ...).
-	mqtt.ERROR = log.New(os.Stderr, "[MQTT-ERROR] ", log.LstdFlags)
-	mqtt.WARN = log.New(os.Stderr, "[MQTT-WARN] ", log.LstdFlags)
+func NewMQTTHandler(log *slog.Logger, cfg MQTTConfig, svc *service.ClimateService) (*MQTTHandler, error) {
+	// Route the paho library's own diagnostics (wrong password, TLS errors, ...) through our logger.
+	// Its warnings are internal noise ("memorystore wiped" on every start), so they are logged at
+	// debug level; real connection problems are reported by our own connect/lost handlers and by
+	// paho's errors.
+	pahoLog := log.With("library", "paho").Handler()
+	mqtt.ERROR = slog.NewLogLogger(pahoLog, slog.LevelError)
+	mqtt.WARN = slog.NewLogLogger(pahoLog, slog.LevelDebug)
 
-	h := &MQTTHandler{service: svc, topic: cfg.Topic}
+	h := &MQTTHandler{log: log, service: svc, topic: cfg.Topic}
 
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(cfg.BrokerURL)
@@ -66,20 +71,20 @@ func NewMQTTHandler(cfg MQTTConfig, svc *service.ClimateService) (*MQTTHandler, 
 	opts.SetPingTimeout(10 * time.Second)
 
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
-		log.Println("[INFO] Successfully connected to the MQTT broker from Go!")
+		h.log.Info("connected to the MQTT broker")
 		// Subscribing here (not once at startup) is what keeps data flowing after a broker restart.
 		token := c.Subscribe(h.topic, 1, h.onMessage)
 		if token.Wait() && token.Error() != nil {
-			log.Printf("[ERROR] Subscription to %s failed: %v", h.topic, token.Error())
+			h.log.Error("subscription failed", "topic", h.topic, "error", token.Error())
 			return
 		}
-		log.Printf("[INFO] Successfully subscribed to topic: %s", h.topic)
+		h.log.Info("subscribed", "topic", h.topic)
 	})
 	opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
-		log.Printf("[WARN] Lost connection to the MQTT broker: %v. Waiting for auto-reconnect...", err)
+		h.log.Warn("lost connection to the MQTT broker, waiting for auto-reconnect", "error", err)
 	})
 	opts.SetReconnectingHandler(func(c mqtt.Client, o *mqtt.ClientOptions) {
-		log.Println("[INFO] Reconnecting to the MQTT broker...")
+		h.log.Info("reconnecting to the MQTT broker")
 	})
 
 	h.client = mqtt.NewClient(opts)
@@ -100,7 +105,7 @@ func (h *MQTTHandler) onMessage(_ mqtt.Client, msg mqtt.Message) {
 // Disconnect gracefully closes the connection on application shutdown
 func (h *MQTTHandler) Disconnect() {
 	h.client.Disconnect(250) // Wait 250ms for in-flight messages to complete
-	log.Println("[INFO] MQTT client disconnected successfully")
+	h.log.Info("MQTT client disconnected")
 }
 
 func newTLSConfig(caFile, serverName string) (*tls.Config, error) {

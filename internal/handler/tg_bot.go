@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -35,6 +35,7 @@ type botAPI interface {
 }
 
 type TGHandler struct {
+	log      *slog.Logger
 	bot      *tgbotapi.BotAPI // used only for long polling
 	api      botAPI
 	username string // bot username, to ignore commands addressed to other bots in groups
@@ -46,24 +47,25 @@ type TGHandler struct {
 // NewTGHandler returns nil when the token is missing or invalid (the app then runs without the bot).
 // Who may read the data is decided by the access store: admins always may, everybody else has to ask
 // with /start and wait for an admin to press "Allow".
-func NewTGHandler(token string, store *access.Store, status statusProvider) *TGHandler {
+func NewTGHandler(log *slog.Logger, token string, store *access.Store, status statusProvider) *TGHandler {
 	if token == "" {
-		log.Println("[WARN] TELEGRAM_BOT_TOKEN is not set. The bot will not be started.")
+		log.Warn("TELEGRAM_BOT_TOKEN is not set, the bot will not be started")
 		return nil
 	}
 
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		log.Printf("[ERROR] Failed to initialize Telegram API: %v", err)
+		log.Error("failed to initialize the Telegram API", "error", err)
 		return nil
 	}
 
 	if len(store.Admins()) == 0 {
-		log.Println("[WARN] TELEGRAM_ADMIN_CHAT_IDS is empty: nobody can approve access requests.")
+		log.Warn("TELEGRAM_ADMIN_CHAT_IDS is empty: nobody can approve access requests")
 	}
 
-	log.Printf("[INFO] Authorized Telegram bot account: %s", bot.Self.UserName)
+	log.Info("Telegram bot authorized", "username", bot.Self.UserName)
 	return &TGHandler{
+		log:      log,
 		bot:      bot,
 		api:      bot,
 		username: bot.Self.UserName,
@@ -264,7 +266,7 @@ func (h *TGHandler) approve(chatID int64) (text, toast string) {
 
 	added, err := h.access.Add(chatID, name)
 	if err != nil {
-		log.Printf("[ERROR] Cannot save access for chat %d: %v", chatID, err)
+		h.log.Error("cannot save access", "chat_id", chatID, "error", err)
 		if pending {
 			h.requests.Add(req) // keep it, so the admin can press the button again
 		}
@@ -274,7 +276,7 @@ func (h *TGHandler) approve(chatID int64) (text, toast string) {
 		return fmt.Sprintf("ℹ️ %s (%d) already has access.", name, chatID), "Already has access."
 	}
 
-	log.Printf("[INFO] Access granted to chat %d (%s)", chatID, name)
+	h.log.Info("access granted", "chat_id", chatID)
 	h.send(chatID, "✅ Access granted. Use /status to see the current readings.", "")
 	return fmt.Sprintf("✅ Allowed: %s (%d)", name, chatID), "Allowed."
 }
@@ -285,7 +287,7 @@ func (h *TGHandler) deny(chatID int64) (text, toast string) {
 		return fmt.Sprintf("ℹ️ The request of chat %d was already handled.", chatID), "Already handled."
 	}
 
-	log.Printf("[INFO] Access denied to chat %d (%s)", chatID, req.Name)
+	h.log.Info("access denied", "chat_id", chatID)
 	h.send(chatID, "⛔ Your access request was declined.", "")
 	return fmt.Sprintf("❌ Denied: %s (%d)", req.Name, chatID), "Denied."
 }
@@ -298,11 +300,11 @@ func (h *TGHandler) revoke(chatID int64) string {
 	case errors.Is(err, access.ErrProtected):
 		return fmt.Sprintf("Chat %d is an administrator: remove it from TELEGRAM_ADMIN_CHAT_IDS instead.", chatID)
 	case err != nil:
-		log.Printf("[ERROR] Cannot remove chat %d: %v", chatID, err)
+		h.log.Error("cannot remove access", "chat_id", chatID, "error", err)
 		return "Could not save the access list, try again."
 	}
 
-	log.Printf("[INFO] Access removed for chat %d", chatID)
+	h.log.Info("access removed", "chat_id", chatID)
 	h.send(chatID, "⛔ Your access was revoked by the administrator.", "")
 	return fmt.Sprintf("Removed chat %d.", chatID)
 }
@@ -367,7 +369,7 @@ func (h *TGHandler) send(chatID int64, text, parseMode string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = parseMode
 	if _, err := h.api.Send(msg); err != nil {
-		log.Printf("[ERROR] Telegram send to chat %d failed: %v", chatID, err)
+		h.log.Error("telegram send failed", "chat_id", chatID, "error", err)
 	}
 }
 
@@ -375,7 +377,7 @@ func (h *TGHandler) sendWithMarkup(chatID int64, text string, keyboard tgbotapi.
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ReplyMarkup = keyboard
 	if _, err := h.api.Send(msg); err != nil {
-		log.Printf("[ERROR] Telegram send to chat %d failed: %v", chatID, err)
+		h.log.Error("telegram send failed", "chat_id", chatID, "error", err)
 	}
 }
 
@@ -393,7 +395,7 @@ func (h *TGHandler) editMessage(msg *tgbotapi.Message, text string, keyboard *tg
 	}
 	// Pressing a button twice produces the same text; Telegram answers "message is not modified", which is harmless.
 	if _, err := h.api.Request(edit); err != nil && !strings.Contains(err.Error(), "message is not modified") {
-		log.Printf("[ERROR] Telegram edit in chat %d failed: %v", msg.Chat.ID, err)
+		h.log.Error("telegram edit failed", "chat_id", msg.Chat.ID, "error", err)
 	}
 }
 
@@ -402,6 +404,6 @@ func (h *TGHandler) answerCallback(id, text string, alert bool) {
 	cb := tgbotapi.NewCallback(id, text)
 	cb.ShowAlert = alert
 	if _, err := h.api.Request(cb); err != nil {
-		log.Printf("[ERROR] Telegram callback answer failed: %v", err)
+		h.log.Error("telegram callback answer failed", "error", err)
 	}
 }

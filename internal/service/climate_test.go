@@ -1,13 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"climate-processor/internal/domain"
+	"climate-processor/internal/logger"
 	"climate-processor/internal/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -50,6 +53,7 @@ func newTestServiceWithRepo(t *testing.T, repo ReadingRepository) (*ClimateServi
 	t.Helper()
 	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
 	s := NewClimateService(
+		slog.New(slog.DiscardHandler),
 		metrics.NewClimateMetrics(prometheus.NewRegistry()),
 		repo,
 		Options{
@@ -145,6 +149,40 @@ func TestStorageFailureDoesNotRejectReading(t *testing.T) {
 	}
 	if got := counterValue(t, s.metrics.StoreErrors); got != 1 {
 		t.Errorf("StoreErrors = %v, want 1", got)
+	}
+}
+
+func TestAcceptedReadingIsNotLoggedAtInfo(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewClimateService(
+		logger.New(&buf, slog.LevelInfo, logger.FormatJSON),
+		metrics.NewClimateMetrics(prometheus.NewRegistry()),
+		NopRepository{},
+		Options{},
+	)
+
+	if err := s.ProcessMessage([]byte(validPayload)); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("an accepted reading must not produce INFO logs (one line per reading floods the log), got: %s", buf.String())
+	}
+}
+
+func TestRejectedMessageIsLoggedWithReason(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewClimateService(
+		logger.New(&buf, slog.LevelInfo, logger.FormatJSON),
+		metrics.NewClimateMetrics(prometheus.NewRegistry()),
+		NopRepository{},
+		Options{},
+	)
+
+	_ = s.ProcessMessage([]byte(`hello`))
+
+	got := buf.String()
+	if !strings.Contains(got, `"level":"WARN"`) || !strings.Contains(got, `"reason":"parse"`) {
+		t.Errorf("expected a WARN record with reason=parse, got: %s", got)
 	}
 }
 

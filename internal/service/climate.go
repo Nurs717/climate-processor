@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -24,6 +24,7 @@ const (
 
 	defaultStaleAfter = 5 * time.Minute
 	defaultDeviceID   = "room"
+	maxLoggedPayload  = 256             // bytes of a rejected message written to the log
 	saveTimeout       = 2 * time.Second // upper bound for one database write
 	paToMmHg          = 0.00750062
 )
@@ -40,6 +41,7 @@ type Options struct {
 }
 
 type ClimateService struct {
+	log        *slog.Logger
 	metrics    *metrics.ClimateMetrics // Metrics layer
 	repo       ReadingRepository       // History storage
 	deviceID   string
@@ -56,7 +58,10 @@ type ClimateService struct {
 
 // Dependencies (metrics, repository) are injected via the constructor.
 // A nil repo disables storing readings.
-func NewClimateService(m *metrics.ClimateMetrics, repo ReadingRepository, opts Options) *ClimateService {
+func NewClimateService(log *slog.Logger, m *metrics.ClimateMetrics, repo ReadingRepository, opts Options) *ClimateService {
+	if log == nil {
+		log = slog.Default()
+	}
 	if repo == nil {
 		repo = NopRepository{}
 	}
@@ -73,6 +78,7 @@ func NewClimateService(m *metrics.ClimateMetrics, repo ReadingRepository, opts O
 		opts.Now = time.Now
 	}
 	return &ClimateService{
+		log:        log,
 		metrics:    m,
 		repo:       repo,
 		deviceID:   opts.DeviceID,
@@ -89,20 +95,21 @@ func (s *ClimateService) ProcessMessage(payload []byte) error {
 	var p domain.Payload
 	if err := json.Unmarshal(payload, &p); err != nil {
 		s.metrics.Rejected.WithLabelValues("parse").Inc()
-		log.Printf("[ERROR] Failed to parse JSON: %v", err)
+		s.log.Warn("message rejected", "reason", "parse", "error", err)
 		return fmt.Errorf("%w: %v", ErrInvalidPayload, err)
 	}
 
 	if p.Temperature == nil || p.Humidity == nil || p.Pressure == nil {
 		s.metrics.Rejected.WithLabelValues("missing_field").Inc()
-		log.Printf("[WARN] Payload is missing required fields: %q", payload)
+		s.log.Warn("message rejected", "reason", "missing_field", "payload", loggedPayload(payload))
 		return fmt.Errorf("%w: missing field", ErrInvalidPayload)
 	}
 
 	t, h, pr := *p.Temperature, *p.Humidity, *p.Pressure
 	if t < minTempC || t > maxTempC || h < minHumidity || h > maxHumidity || pr < minPressurePa || pr > maxPressurePa {
 		s.metrics.Rejected.WithLabelValues("out_of_range").Inc()
-		log.Printf("[WARN] Received anomalous readings: T=%.2f°C H=%.2f%% P=%.0fPa. Ignoring.", t, h, pr)
+		s.log.Warn("message rejected", "reason", "out_of_range",
+			"temperature_c", t, "humidity_percent", h, "pressure_pa", pr)
 		return fmt.Errorf("%w: value out of range", ErrInvalidPayload)
 	}
 
@@ -123,7 +130,8 @@ func (s *ClimateService) ProcessMessage(payload []byte) error {
 
 	s.save(data)
 
-	log.Printf("[METRICS] Updated in Prometheus -> T: %.2f °C, H: %.2f%%", t, h)
+	s.log.Debug("reading accepted", "device_id", s.deviceID,
+		"temperature_c", t, "humidity_percent", h, "pressure_pa", pr)
 	return nil
 }
 
@@ -134,8 +142,16 @@ func (s *ClimateService) save(d domain.ClimateData) {
 	defer cancel()
 	if err := s.repo.Save(ctx, d); err != nil {
 		s.metrics.StoreErrors.Inc()
-		log.Printf("[ERROR] Failed to store reading: %v", err)
+		s.log.Error("failed to store reading", "device_id", d.DeviceID, "error", err)
 	}
+}
+
+// loggedPayload shortens a rejected message so that a huge payload cannot flood the log.
+func loggedPayload(p []byte) string {
+	if len(p) > maxLoggedPayload {
+		return string(p[:maxLoggedPayload]) + "…"
+	}
+	return string(p)
 }
 
 // GetCurrentStatus formats the data for sending to Telegram
