@@ -11,10 +11,10 @@ VM_ZONE  ?= us-central1-a
 CLOUD_COMPOSE := docker compose -f deploy/local/docker-compose.cloud.yml
 
 .DEFAULT_GOAL := help
-.PHONY: help test lint vuln build run up down logs ps send metrics tunnel cloud-up cloud-down
+.PHONY: help test lint vuln build run up down logs ps send metrics tunnel tunnel-keep cloud-up cloud-down
 
 help: ## Show this list
-	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-9s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
 test: ## Run unit tests with the race detector
 	go test -race -cover ./...
@@ -55,7 +55,17 @@ metrics: ## Show the room_* metrics exposed by the service
 	@curl -s localhost:2112/metrics | grep '^room_'
 
 tunnel: ## Forward the cloud service metrics to localhost:12112 (keep it running)
-	gcloud compute ssh $(VM_NAME) --zone=$(VM_ZONE) --tunnel-through-iap -- -N -L 12112:127.0.0.1:2112
+	gcloud compute ssh $(VM_NAME) --zone=$(VM_ZONE) --tunnel-through-iap -- \
+		-N -L 12112:127.0.0.1:2112 \
+		-o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes
+
+tunnel-keep: ## Like `make tunnel`, but reconnects by itself after a drop (for overnight runs)
+	@trap 'echo "Stopped."; exit 0' INT; \
+	while true; do \
+		$(MAKE) --no-print-directory tunnel; \
+		echo "Tunnel closed, reconnecting in 5 s (Ctrl+C to stop)"; \
+		sleep 5; \
+	done
 
 cloud-up: ## Grafana + Prometheus on this machine, reading the cloud VM (needs `make tunnel`)
 	$(CLOUD_COMPOSE) up -d

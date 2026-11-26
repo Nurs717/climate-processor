@@ -386,7 +386,9 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "never",
-            "spanNulls": false
+            "spanNulls": false,
+            "axisSoftMin": 20,
+            "axisSoftMax": 30
           }
         },
         "overrides": []
@@ -438,7 +440,9 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "never",
-            "spanNulls": false
+            "spanNulls": false,
+            "axisSoftMin": 15,
+            "axisSoftMax": 60
           }
         },
         "overrides": []
@@ -542,7 +546,9 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "never",
-            "spanNulls": false
+            "spanNulls": false,
+            "axisSoftMin": 0,
+            "axisSoftMax": 10
           }
         },
         "overrides": []
