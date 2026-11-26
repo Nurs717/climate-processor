@@ -31,6 +31,10 @@ type Config struct {
 	// How many requests per minute and how large a burst one client address may make. 0 per minute = no limit.
 	APIRatePerMin int
 	APIRateBurst  int
+	// The same for the signed-in owner, who has a budget of their own, counted per user and not per address.
+	// 0 per minute = the owner is limited like everybody else. With APIRatePerMin = 0 nobody is limited at all.
+	APIOwnerRatePerMin int
+	APIOwnerRateBurst  int
 
 	// Owner sign-in with Telegram ("Log In With Telegram", OpenID Connect). It works only when PUBLIC_URL, the
 	// client id and secret and DB_PATH (the sessions are kept there) are all set; without it everybody is an
@@ -83,6 +87,9 @@ func Load() *Config {
 		TrustedProxies: parseTrustedProxies(getEnv("TRUSTED_PROXIES", "")),
 		APIRatePerMin:  getEnvInt("API_RATE_PER_MIN", 60, 0),
 		APIRateBurst:   getEnvInt("API_RATE_BURST", 20, 1),
+
+		APIOwnerRatePerMin: getEnvInt("API_OWNER_RATE_PER_MIN", 600, 0),
+		APIOwnerRateBurst:  getEnvInt("API_OWNER_RATE_BURST", 100, 1),
 
 		PublicURL:           parsePublicURL(getEnv("PUBLIC_URL", "")),
 		TGLoginClientID:     strings.TrimSpace(getEnv("TELEGRAM_OIDC_CLIENT_ID", "")),

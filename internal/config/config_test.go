@@ -201,6 +201,50 @@ func TestLoadAPIRateLimitFallsBackOnBadValues(t *testing.T) {
 	}
 }
 
+func TestLoadOwnerRateLimit(t *testing.T) {
+	t.Setenv("API_OWNER_RATE_PER_MIN", " 300 ")
+	t.Setenv("API_OWNER_RATE_BURST", "50")
+
+	cfg := Load()
+
+	if cfg.APIOwnerRatePerMin != 300 || cfg.APIOwnerRateBurst != 50 {
+		t.Errorf("got %d, %d; want 300, 50", cfg.APIOwnerRatePerMin, cfg.APIOwnerRateBurst)
+	}
+}
+
+func TestLoadOwnerRateLimitDefaultsToTenTimesTheDemoBudget(t *testing.T) {
+	unsetenv(t, "API_OWNER_RATE_PER_MIN", "API_OWNER_RATE_BURST")
+
+	cfg := Load()
+
+	if cfg.APIOwnerRatePerMin != 600 || cfg.APIOwnerRateBurst != 100 {
+		t.Errorf("defaults = %d, %d; want 600, 100", cfg.APIOwnerRatePerMin, cfg.APIOwnerRateBurst)
+	}
+}
+
+func TestLoadOwnerRateLimitCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("API_OWNER_RATE_PER_MIN", "0")
+
+	if got := Load().APIOwnerRatePerMin; got != 0 {
+		t.Errorf("API_OWNER_RATE_PER_MIN=0 must give the owner the limit of everybody, got %d", got)
+	}
+}
+
+func TestLoadOwnerRateLimitFallsBackOnBadValues(t *testing.T) {
+	for _, bad := range []string{"abc", "-1", "1.5"} {
+		t.Setenv("API_OWNER_RATE_PER_MIN", bad)
+		if got := Load().APIOwnerRatePerMin; got != 600 {
+			t.Errorf("API_OWNER_RATE_PER_MIN=%q: got %d, want the default 600", bad, got)
+		}
+	}
+	for _, bad := range []string{"abc", "0", "-3"} {
+		t.Setenv("API_OWNER_RATE_BURST", bad)
+		if got := Load().APIOwnerRateBurst; got != 100 {
+			t.Errorf("API_OWNER_RATE_BURST=%q: got %d, want the default 100", bad, got)
+		}
+	}
+}
+
 func TestParsePublicURL(t *testing.T) {
 	tests := []struct {
 		name string
