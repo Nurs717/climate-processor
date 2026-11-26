@@ -122,3 +122,81 @@ func TestLoadHTTPAddrDefault(t *testing.T) {
 		t.Errorf("default HTTPAddr = %q, want :8080", got)
 	}
 }
+
+// unsetenv makes the variables absent for the test (t.Setenv restores the original values afterwards).
+func unsetenv(t *testing.T, keys ...string) {
+	t.Helper()
+	for _, key := range keys {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestParseTrustedProxies(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"empty", "", nil},
+		{"one range", "10.0.0.0/8", []string{"10.0.0.0/8"}},
+		{"several, with spaces", "10.0.0.0/8, 172.16.0.0/12 ,192.168.0.0/16", []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}},
+		{"single addresses", "203.0.113.5,2001:db8::1", []string{"203.0.113.5", "2001:db8::1"}},
+		{"IPv6 range", "fd00::/8", []string{"fd00::/8"}},
+		{"junk is skipped", "10.0.0.0/33, abc, ,10.0.0.1/8x,172.16.0.0/12,fe80::1%eth0", []string{"172.16.0.0/12"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseTrustedProxies(tt.raw); !slices.Equal(got, tt.want) {
+				t.Errorf("parseTrustedProxies(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadAPIProtection(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "172.16.0.0/12")
+	t.Setenv("API_RATE_PER_MIN", " 120 ") // stray spaces are tolerated
+	t.Setenv("API_RATE_BURST", "40")
+
+	cfg := Load()
+
+	if !slices.Equal(cfg.TrustedProxies, []string{"172.16.0.0/12"}) || cfg.APIRatePerMin != 120 || cfg.APIRateBurst != 40 {
+		t.Errorf("got %v, %d, %d", cfg.TrustedProxies, cfg.APIRatePerMin, cfg.APIRateBurst)
+	}
+}
+
+func TestLoadAPIProtectionDefaults(t *testing.T) {
+	unsetenv(t, "TRUSTED_PROXIES", "API_RATE_PER_MIN", "API_RATE_BURST")
+
+	cfg := Load()
+
+	if len(cfg.TrustedProxies) != 0 || cfg.APIRatePerMin != 60 || cfg.APIRateBurst != 20 {
+		t.Errorf("defaults = %v, %d, %d; want no proxies, 60, 20", cfg.TrustedProxies, cfg.APIRatePerMin, cfg.APIRateBurst)
+	}
+}
+
+func TestLoadAPIRateLimitCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("API_RATE_PER_MIN", "0")
+
+	if got := Load().APIRatePerMin; got != 0 {
+		t.Errorf("API_RATE_PER_MIN=0 must switch the limit off, got %d", got)
+	}
+}
+
+func TestLoadAPIRateLimitFallsBackOnBadValues(t *testing.T) {
+	for _, bad := range []string{"abc", "-1", "1.5"} {
+		t.Setenv("API_RATE_PER_MIN", bad)
+		if got := Load().APIRatePerMin; got != 60 {
+			t.Errorf("API_RATE_PER_MIN=%q: got %d, want the default 60", bad, got)
+		}
+	}
+	for _, bad := range []string{"abc", "0", "-3"} {
+		t.Setenv("API_RATE_BURST", bad)
+		if got := Load().APIRateBurst; got != 20 {
+			t.Errorf("API_RATE_BURST=%q: got %d, want the default 20", bad, got)
+		}
+	}
+}

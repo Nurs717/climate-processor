@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,13 @@ type Config struct {
 	MetricsPort string // listen address of the internal HTTP server (/metrics, /healthz), e.g. ":2112"
 	// Listen address of the REST API (internal/handler/rest), e.g. ":8080". Empty = the API is disabled.
 	HTTPAddr string
+	// The REST API is meant to sit behind a reverse proxy (Caddy) that puts the real client address into
+	// X-Forwarded-For. The header is believed only when the request comes from one of these IPs or CIDR ranges.
+	// Empty = no proxy is trusted: the client is whoever connects.
+	TrustedProxies []string
+	// How many requests per minute and how large a burst one client address may make. 0 per minute = no limit.
+	APIRatePerMin int
+	APIRateBurst  int
 
 	TGToken string
 	// Telegram chat IDs of the administrators: they always have access and approve or remove other users
@@ -56,6 +64,10 @@ func Load() *Config {
 
 		MetricsPort: getEnv("METRICS_PORT", ":2112"),
 		HTTPAddr:    getEnv("HTTP_ADDR", ":8080"),
+
+		TrustedProxies: parseTrustedProxies(getEnv("TRUSTED_PROXIES", "")),
+		APIRatePerMin:  getEnvInt("API_RATE_PER_MIN", 60, 0),
+		APIRateBurst:   getEnvInt("API_RATE_BURST", 20, 1),
 
 		TGToken:      getEnv("TELEGRAM_BOT_TOKEN", ""),
 		AdminChatIDs: parseChatIDs(getEnv("TELEGRAM_ADMIN_CHAT_IDS", "")),
@@ -92,6 +104,20 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	return d
 }
 
+// getEnvInt reads a whole number that must be at least minValue; anything else falls back to the default.
+func getEnvInt(key string, fallback, minValue int) int {
+	value, exists := os.LookupEnv(key)
+	if !exists || value == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < minValue {
+		slog.Warn("invalid environment variable, using the default", "key", key, "value", value, "default", fallback)
+		return fallback
+	}
+	return n
+}
+
 // parseChatIDs parses a comma-separated list of Telegram chat IDs (group IDs are negative).
 // Invalid items are skipped with a warning.
 func parseChatIDs(raw string) []int64 {
@@ -109,4 +135,31 @@ func parseChatIDs(raw string) []int64 {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// parseTrustedProxies parses a comma-separated list of IP addresses and CIDR ranges. Invalid items are skipped
+// with a warning: that only makes the service trust fewer proxies, which is the safe direction.
+func parseTrustedProxies(raw string) []string {
+	var list []string
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !validProxy(part) {
+			slog.Warn("ignoring invalid trusted proxy", "env", "TRUSTED_PROXIES", "value", part)
+			continue
+		}
+		list = append(list, part)
+	}
+	return list
+}
+
+func validProxy(s string) bool {
+	if strings.Contains(s, "/") {
+		_, err := netip.ParsePrefix(s)
+		return err == nil
+	}
+	addr, err := netip.ParseAddr(s)
+	return err == nil && addr.Zone() == "" // the router does not understand IPv6 zones
 }
