@@ -185,6 +185,12 @@ the pipeline redeploys and Caddy obtains a new certificate.
 Certificates and the ACME account live in the `caddy-data` volume and survive deployments. Do not delete the volume:
 Let's Encrypt allows only a few new certificates per host name per week.
 
+The service finds the real client address in the `X-Forwarded-For` header that Caddy sets, but believes that header only when
+the request comes from a proxy listed in `TRUSTED_PROXIES` (the private Docker networks, set in `docker-compose.yml`).
+Every client address gets its own request budget: `API_RATE_PER_MIN` requests per minute (default 60) with a burst of
+`API_RATE_BURST` (default 20). A history query (`/readings`, `/stats`) costs 5 requests, `/latest` costs 1.
+A client over the budget gets `429 Too Many Requests` with a `Retry-After` header (seconds). `API_RATE_PER_MIN=0` switches the limit off.
+
 The deploy script waits only for the service to become healthy, not for Caddy. Check HTTPS after a deployment:
 
 ```bash

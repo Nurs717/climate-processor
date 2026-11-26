@@ -64,6 +64,9 @@ services:
       DB_PATH: /data/climate.db # reading history; the climate-data volume keeps it across deployments
       TIMEZONE: Asia/Almaty
       STALE_AFTER: 5m
+      # Caddy reaches the API from the private Docker network and puts the real client address into X-Forwarded-For.
+      # Only these ranges are believed, so a client cannot choose its own address (and escape the rate limit).
+      TRUSTED_PROXIES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
     volumes:
       - ./certs/ca.crt:/certs/ca.crt:ro
       - climate-data:/data
