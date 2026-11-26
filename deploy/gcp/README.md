@@ -191,7 +191,13 @@ The service finds the real client address in the `X-Forwarded-For` header that C
 the request comes from a proxy listed in `TRUSTED_PROXIES` (the private Docker networks, set in `docker-compose.yml`).
 Every client address gets its own request budget: `API_RATE_PER_MIN` requests per minute (default 60) with a burst of
 `API_RATE_BURST` (default 20). A history query (`/readings`, `/stats`) costs 5 requests, `/latest` costs 1.
-A client over the budget gets `429 Too Many Requests` with a `Retry-After` header (seconds). `API_RATE_PER_MIN=0` switches the limit off.
+A client over the budget gets `429 Too Many Requests` with a `Retry-After` header (seconds). `API_RATE_PER_MIN=0` switches all limits off.
+
+The signed-in owner has a higher budget of their own: `API_OWNER_RATE_PER_MIN` (default 600) with a burst of `API_OWNER_RATE_BURST`
+(default 100), the same prices per request. It is counted per user and not per address, so it does not depend on the network the owner
+is on, and a busy demo client on the same address cannot use it up. `API_OWNER_RATE_PER_MIN=0` gives the owner the budget of everybody.
+A request that carries a session token also takes one token per request from the owner budget of its address, before the token is
+checked: a flood of made-up tokens is refused before it reaches the database.
 
 The deploy script waits only for the service to become healthy, not for Caddy. Check HTTPS after a deployment:
 

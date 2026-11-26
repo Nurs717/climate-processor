@@ -239,9 +239,10 @@ func newOwnerAuth(ctx context.Context, log *slog.Logger, cfg *config.Config, ses
 }
 
 // newAPIServer builds the public REST API server: its trusted proxies (to find the real client address), the
-// per-client rate limit and the owner sign-in (nil = off) come from the configuration.
+// per-client rate limit, the higher limit of the owner and the owner sign-in (nil = off) come from the configuration.
 func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader, owner *ownerAuth) (*http.Server, error) {
 	opts := rest.Options{TrustedProxies: cfg.TrustedProxies}
+	var ownerRate, ownerBurst int // what the owner is limited to; 0 = the same as everybody
 	if cfg.APIRatePerMin > 0 {
 		limiter, err := ratelimit.New(cfg.APIRatePerMin, cfg.APIRateBurst, maxTrackedClients)
 		if err != nil {
@@ -257,11 +258,24 @@ func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader, owne
 		opts.SignIn = owner.login
 		// Secure cookies, unless the service is on plain http (local development: PUBLIC_URL allows it only there).
 		opts.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
+		// The owner has a higher limit of their own, counted per user. It goes with the limit of everybody (with
+		// API_RATE_PER_MIN=0 nobody is limited) and is off with API_OWNER_RATE_PER_MIN=0: the owner then shares the limit
+		// of everybody.
+		if opts.Limiter != nil && cfg.APIOwnerRatePerMin > 0 {
+			ownerLimiter, err := ratelimit.New(cfg.APIOwnerRatePerMin, cfg.APIOwnerRateBurst, maxTrackedClients)
+			if err != nil {
+				return nil, fmt.Errorf("owner rate limiter: %w", err)
+			}
+			opts.OwnerLimiter = ownerLimiter
+			ownerRate, ownerBurst = cfg.APIOwnerRatePerMin, cfg.APIOwnerRateBurst
+		}
 	}
 	log.Info("REST API settings",
 		"trusted_proxies", cfg.TrustedProxies,
 		"rate_per_minute", cfg.APIRatePerMin,
 		"rate_burst", cfg.APIRateBurst,
+		"owner_rate_per_minute", ownerRate,
+		"owner_rate_burst", ownerBurst,
 		"owner_sign_in", owner != nil)
 
 	router, err := rest.NewRouter(log.With("component", "rest"), reader, opts)

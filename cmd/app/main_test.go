@@ -283,6 +283,165 @@ func TestNewAPIServerCookiesAreNotSecureOnLocalHTTP(t *testing.T) {
 	}
 }
 
+// memorySessions keeps the sessions in a map, so that a test can sign the owner in.
+type memorySessions struct {
+	noSessions
+	sessions map[string]domain.Session
+}
+
+func (m *memorySessions) CreateSession(_ context.Context, s domain.Session) error {
+	m.sessions[s.ID] = s
+	return nil
+}
+
+func (m *memorySessions) Session(_ context.Context, id string) (domain.Session, bool, error) {
+	s, ok := m.sessions[id]
+	return s, ok, nil
+}
+
+// limitedConfig has the sign-in and the rate limits: a burst of 2 for everybody, a burst of 20 for the owner.
+func limitedConfig() *config.Config {
+	cfg := signInConfig()
+	cfg.APIRatePerMin, cfg.APIRateBurst = 60, 2
+	cfg.APIOwnerRatePerMin, cfg.APIOwnerRateBurst = 600, 20
+	return cfg
+}
+
+// signedInServer is the API server with the owner sign-in, and the session token of the owner (Telegram id 42).
+func signedInServer(t *testing.T, cfg *config.Config, log *slog.Logger) (*http.Server, string) {
+	t.Helper()
+	owners, err := access.NewStore("", cfg.AdminChatIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := newOwnerAuth(context.Background(), quiet(), cfg, &memorySessions{sessions: map[string]domain.Session{}}, owners)
+	if err != nil || owner == nil {
+		t.Fatalf("newOwnerAuth = %v, %v; want the sign-in", owner, err)
+	}
+	token, _, err := owner.service.Create(context.Background(), 42, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := newAPIServer(log, cfg, fakeReader{}, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, token
+}
+
+// callAs makes a request from one address, as the owner when a session token is given.
+func callAs(h http.Handler, token string) int {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/latest", nil)
+	req.RemoteAddr = "192.0.2.1:1"
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func TestNewAPIServerGivesTheOwnerAHigherLimit(t *testing.T) {
+	log, out := capture()
+	srv, token := signedInServer(t, limitedConfig(), log)
+
+	// Everybody has a burst of 2: this address has used it up.
+	for i, want := range []int{200, 200, 429} {
+		if got := callAs(srv.Handler, ""); got != want {
+			t.Errorf("anonymous request %d: %d, want %d", i+1, got, want)
+		}
+	}
+	// The owner has a burst of 20 of their own, from the very same address.
+	for i := range 20 {
+		if got := callAs(srv.Handler, token); got != 200 {
+			t.Fatalf("owner request %d: %d, want 200", i+1, got)
+		}
+	}
+	if got := callAs(srv.Handler, token); got != 429 {
+		t.Errorf("owner request 21: %d, want 429: the owner is limited too", got)
+	}
+	if got := out.String(); !strings.Contains(got, "owner_rate_per_minute=600") || !strings.Contains(got, "owner_rate_burst=20") {
+		t.Errorf("log = %q; want the owner limit in the settings", got)
+	}
+}
+
+// 600 requests a minute are 10 a second: a spent budget is worth a request again after a fraction of a second, which
+// the 60 a minute of everybody (1 a second) would not give.
+func TestNewAPIServerOwnerLimitRefillsAtTheOwnerRate(t *testing.T) {
+	srv, token := signedInServer(t, limitedConfig(), quiet())
+	spent := false
+	for range 100 {
+		if callAs(srv.Handler, token) == http.StatusTooManyRequests {
+			spent = true
+			break
+		}
+	}
+	if !spent {
+		t.Fatal("the owner budget was never used up")
+	}
+
+	time.Sleep(300 * time.Millisecond) // 3 requests at 10 a second, a third of one at 1 a second
+
+	if got := callAs(srv.Handler, token); got != http.StatusOK {
+		t.Errorf("owner request after 300ms: %d, want 200: the budget refills at the owner rate", got)
+	}
+}
+
+func TestNewAPIServerOwnerSharesTheLimitWhenTheOwnerLimitIsOff(t *testing.T) {
+	cfg := limitedConfig()
+	cfg.APIOwnerRatePerMin = 0
+	log, out := capture()
+	srv, token := signedInServer(t, cfg, log)
+
+	for i, want := range []int{200, 200, 429} {
+		if got := callAs(srv.Handler, token); got != want {
+			t.Errorf("owner request %d: %d, want %d (the limit of everybody)", i+1, got, want)
+		}
+	}
+	if !strings.Contains(out.String(), "owner_rate_per_minute=0") {
+		t.Errorf("log = %q; want the owner limit reported as off", out)
+	}
+}
+
+func TestNewAPIServerRateZeroSwitchesTheOwnerLimitOffToo(t *testing.T) {
+	cfg := limitedConfig()
+	cfg.APIRatePerMin = 0 // nobody is limited, whatever the owner limit says
+	srv, token := signedInServer(t, cfg, quiet())
+
+	for i := range 50 {
+		if got := callAs(srv.Handler, token); got != 200 {
+			t.Fatalf("owner request %d: %d, want 200 (no limit)", i+1, got)
+		}
+	}
+}
+
+func TestNewAPIServerOwnerLimitNeedsTheSignIn(t *testing.T) {
+	cfg := &config.Config{HTTPAddr: ":8080", APIRatePerMin: 60, APIRateBurst: 2, APIOwnerRatePerMin: 600, APIOwnerRateBurst: 20}
+	log, out := capture()
+	srv, err := newAPIServer(log, cfg, fakeReader{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Without the sign-in a token means nothing: everybody has the limit of everybody.
+	for i, want := range []int{200, 200, 429} {
+		if got := callAs(srv.Handler, "some-token"); got != want {
+			t.Errorf("request %d: %d, want %d", i+1, got, want)
+		}
+	}
+	if !strings.Contains(out.String(), "owner_rate_per_minute=0") {
+		t.Errorf("log = %q; want the owner limit reported as off", out)
+	}
+}
+
+func TestNewAPIServerRejectsAnOwnerLimitWithoutABurst(t *testing.T) {
+	cfg := limitedConfig()
+	cfg.APIOwnerRateBurst = 0
+	if _, err := newAPIServer(quiet(), cfg, fakeReader{}, newOwner(t, cfg)); err == nil {
+		t.Error("an owner limit without a burst must fail the start")
+	}
+}
+
 func TestNewAPIServerWithoutTheSignInHasNoSignInRoutes(t *testing.T) {
 	srv, err := newAPIServer(quiet(), &config.Config{HTTPAddr: ":8080"}, fakeReader{}, nil)
 	if err != nil {
