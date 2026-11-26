@@ -8,12 +8,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata" // embed the timezone database: the alpine runtime image has none
 
 	"climate-processor/internal/access"
+	"climate-processor/internal/auth"
+	"climate-processor/internal/auth/telegram"
 	"climate-processor/internal/config"
 	"climate-processor/internal/handler"
 	"climate-processor/internal/handler/rest"
@@ -71,7 +74,7 @@ func run(log *slog.Logger, cfg *config.Config) error {
 	climateMetrics := metrics.NewClimateMetrics(prometheus.DefaultRegisterer)
 
 	// 2. Reading history (optional)
-	repo, closeRepo, err := openRepository(ctx, log, cfg.DBPath)
+	repo, sessions, closeRepo, err := openRepository(ctx, log, cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("storage: %w", err)
 	}
@@ -115,6 +118,17 @@ func run(log *slog.Logger, cfg *config.Config) error {
 		log.Warn("ACCESS_FILE is not set: users approved in the bot are lost on restart")
 	}
 
+	// Owner sign-in with Telegram: the sessions live in the database, the owners are the admins of the bot.
+	owner, err := newOwnerAuth(ctx, log, cfg, sessions, accessStore)
+	if err != nil {
+		return err
+	}
+	if owner != nil {
+		wg.Go(func() {
+			owner.service.RunCleanup(ctx, sessionCleanupEvery)
+		})
+	}
+
 	// Initialize and start the Telegram bot in a goroutine
 	notify := func(string) {}
 	if tgHandler := handler.NewTGHandler(log.With("component", "telegram"), cfg.TGToken, accessStore, climateService); tgHandler != nil {
@@ -144,7 +158,7 @@ func run(log *slog.Logger, cfg *config.Config) error {
 
 	// REST API for the apps (the PWA, ...). An empty HTTP_ADDR disables it.
 	if cfg.HTTPAddr != "" {
-		apiSrv, err := newAPIServer(log, cfg, climateService)
+		apiSrv, err := newAPIServer(log, cfg, climateService, owner)
 		if err != nil {
 			return err
 		}
@@ -171,9 +185,62 @@ func run(log *slog.Logger, cfg *config.Config) error {
 // maxTrackedClients bounds the memory of the rate limiter: it remembers at most this many client addresses.
 const maxTrackedClients = 10_000
 
-// newAPIServer builds the public REST API server: its trusted proxies (to find the real client address) and
-// the per-client rate limit both come from the configuration.
-func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader) (*http.Server, error) {
+// sessionCleanupEvery is how often the sessions that have expired are deleted from the database.
+const sessionCleanupEvery = time.Hour
+
+// ownerAuth is the owner sign-in: the sessions of the owner and the Telegram flow that starts them.
+type ownerAuth struct {
+	service *auth.Service
+	login   *telegram.Login
+}
+
+// newOwnerAuth sets up the owner sign-in. It returns nil, and every client stays anonymous with the read-only demo
+// role, when the sign-in is not configured or is configured halfway: that deserves a warning, but not stopping the
+// sensor's service. The sign-in needs PUBLIC_URL, the client id and secret of the bot's OpenID Connect settings and
+// a database for the sessions (sessions is nil without one).
+func newOwnerAuth(ctx context.Context, log *slog.Logger, cfg *config.Config, sessions auth.SessionStore, owners auth.Owners) (*ownerAuth, error) {
+	if cfg.PublicURL == "" && cfg.TGLoginClientID == "" && cfg.TGLoginClientSecret == "" {
+		log.Info("owner sign-in is off: PUBLIC_URL and TELEGRAM_OIDC_CLIENT_ID/SECRET are not set, everybody is a demo client")
+		return nil, nil
+	}
+	var missing []string
+	for _, setting := range []struct {
+		name string
+		set  bool
+	}{
+		{"PUBLIC_URL", cfg.PublicURL != ""},
+		{"TELEGRAM_OIDC_CLIENT_ID", cfg.TGLoginClientID != ""},
+		{"TELEGRAM_OIDC_CLIENT_SECRET", cfg.TGLoginClientSecret != ""},
+		{"DB_PATH", sessions != nil},
+	} {
+		if !setting.set {
+			missing = append(missing, setting.name)
+		}
+	}
+	if len(missing) > 0 {
+		log.Warn("owner sign-in is off: some of its settings are missing, everybody is a demo client", "missing", missing)
+		return nil, nil
+	}
+
+	redirectURL := cfg.PublicURL + rest.TelegramCallbackPath
+	provider, err := telegram.NewProvider(ctx, cfg.TGLoginClientID, cfg.TGLoginClientSecret, redirectURL)
+	if err != nil {
+		return nil, fmt.Errorf("telegram sign-in: %w", err)
+	}
+	if len(cfg.AdminChatIDs) == 0 {
+		log.Warn("TELEGRAM_ADMIN_CHAT_IDS is empty: nobody can sign in as the owner")
+	}
+	// The redirect address is logged because it must match, character for character, the one registered in @BotFather.
+	log.Info("owner sign-in is on", "redirect_uri", redirectURL, "session_ttl", cfg.SessionTTL.String())
+	return &ownerAuth{
+		service: auth.NewService(log.With("component", "auth"), sessions, owners, auth.Options{TTL: cfg.SessionTTL}),
+		login:   telegram.NewLogin(log.With("component", "telegram-login"), provider, telegram.Options{}),
+	}, nil
+}
+
+// newAPIServer builds the public REST API server: its trusted proxies (to find the real client address), the
+// per-client rate limit and the owner sign-in (nil = off) come from the configuration.
+func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader, owner *ownerAuth) (*http.Server, error) {
 	opts := rest.Options{TrustedProxies: cfg.TrustedProxies}
 	if cfg.APIRatePerMin > 0 {
 		limiter, err := ratelimit.New(cfg.APIRatePerMin, cfg.APIRateBurst, maxTrackedClients)
@@ -184,10 +251,18 @@ func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader) (*ht
 	} else {
 		log.Warn("API_RATE_PER_MIN is 0: the API is not rate limited")
 	}
+	if owner != nil {
+		// Assigned only here, for the same reason as the limiter: a nil pointer in an interface is not "off".
+		opts.Sessions = owner.service
+		opts.SignIn = owner.login
+		// Secure cookies, unless the service is on plain http (local development: PUBLIC_URL allows it only there).
+		opts.SecureCookies = strings.HasPrefix(cfg.PublicURL, "https://")
+	}
 	log.Info("REST API settings",
 		"trusted_proxies", cfg.TrustedProxies,
 		"rate_per_minute", cfg.APIRatePerMin,
-		"rate_burst", cfg.APIRateBurst)
+		"rate_burst", cfg.APIRateBurst,
+		"owner_sign_in", owner != nil)
 
 	router, err := rest.NewRouter(log.With("component", "rest"), reader, opts)
 	if err != nil {
@@ -219,19 +294,19 @@ func startHTTPServer(log *slog.Logger, srv *http.Server, endpoints string, stop 
 	}()
 }
 
-// openRepository returns the reading storage and a function that closes it.
-// Without a path readings are dropped (NopRepository).
-func openRepository(ctx context.Context, log *slog.Logger, path string) (service.ReadingRepository, func() error, error) {
+// openRepository returns the reading storage, the session storage (the same database) and a function that closes
+// them. Without a path readings are dropped (NopRepository) and there are no sessions (nil): nobody can sign in.
+func openRepository(ctx context.Context, log *slog.Logger, path string) (service.ReadingRepository, auth.SessionStore, func() error, error) {
 	if path == "" {
 		log.Warn("DB_PATH is not set: readings are not stored")
-		return service.NopRepository{}, func() error { return nil }, nil
+		return service.NopRepository{}, nil, func() error { return nil }, nil
 	}
 	r, err := sqlite.New(ctx, path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	log.Info("readings are stored", "path", path)
-	return r, r.Close, nil
+	return r, r, r.Close, nil
 }
 
 // waitTimeout waits for wg, but not longer than d.
