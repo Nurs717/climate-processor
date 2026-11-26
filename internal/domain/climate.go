@@ -18,3 +18,25 @@ type ClimateData struct {
 	Pressure    float64
 	Timestamp   time.Time
 }
+
+// Stat is the average, minimum and maximum of one quantity.
+type Stat struct {
+	Avg float64
+	Min float64
+	Max float64
+}
+
+// Summary aggregates a set of readings. Count == 0 means there were none, and the stats are then zero.
+type Summary struct {
+	Count       int
+	Temperature Stat // °C
+	Humidity    Stat // %
+	Pressure    Stat // Pa
+}
+
+// Bucket is the Summary of the readings that fall into one time window of a series.
+// Start is the beginning of the window (UTC).
+type Bucket struct {
+	Start time.Time
+	Summary
+}

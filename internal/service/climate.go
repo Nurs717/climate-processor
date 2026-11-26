@@ -156,16 +156,13 @@ func loggedPayload(p []byte) string {
 
 // GetCurrentStatus formats the data for sending to Telegram
 func (s *ClimateService) GetCurrentStatus() string {
-	s.mu.RLock()
-	data, hasData := s.currentData, s.hasData
-	s.mu.RUnlock()
-
-	if !hasData {
+	latest, ok := s.Latest()
+	if !ok {
 		return "⚠️ No sensor data received yet."
 	}
 
 	// Convert Pascals to mmHg for convenience
-	mmHg := data.Pressure * paToMmHg
+	mmHg := latest.Pressure * paToMmHg
 
 	text := fmt.Sprintf(
 		"🏠 *Apartment climate:*\n\n"+
@@ -173,14 +170,14 @@ func (s *ClimateService) GetCurrentStatus() string {
 			"💧 *Humidity:* `%.1f%%`\n"+
 			"🧭 *Pressure:* `%.1f mmHg`\n\n"+
 			"🕒 _Updated: %s_",
-		data.Temperature,
-		data.Humidity,
+		latest.Temperature,
+		latest.Humidity,
 		mmHg,
-		data.Timestamp.In(s.loc).Format("15:04:05"),
+		latest.Timestamp.In(s.loc).Format("15:04:05"),
 	)
 
-	if age := s.now().Sub(data.Timestamp); age > s.staleAfter {
-		text += fmt.Sprintf("\n\n⚠️ _Data is stale: last update %s ago._", formatAge(age))
+	if latest.Stale {
+		text += fmt.Sprintf("\n\n⚠️ _Data is stale: last update %s ago._", formatAge(latest.Age))
 	}
 	return text
 }

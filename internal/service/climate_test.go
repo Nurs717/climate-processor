@@ -19,10 +19,22 @@ import (
 
 const validPayload = `{"temperature":21.5,"humidity":45.2,"pressure":101325}`
 
-// fakeRepo is an in-memory ReadingRepository; err, when set, makes every Save fail.
+// fakeRepo is an in-memory ReadingRepository; err, when set, makes every call fail.
 type fakeRepo struct {
 	saved []domain.ClimateData
 	err   error
+
+	buckets []domain.Bucket // returned by Aggregate
+	summary domain.Summary  // returned by Summary
+	calls   int             // number of Aggregate and Summary calls
+	call    historyCall     // arguments of the last one
+}
+
+// historyCall records the arguments of an Aggregate or Summary call.
+type historyCall struct {
+	deviceID string
+	from, to time.Time
+	step     time.Duration
 }
 
 func (f *fakeRepo) Save(_ context.Context, d domain.ClimateData) error {
@@ -31,6 +43,24 @@ func (f *fakeRepo) Save(_ context.Context, d domain.ClimateData) error {
 	}
 	f.saved = append(f.saved, d)
 	return nil
+}
+
+func (f *fakeRepo) Aggregate(_ context.Context, deviceID string, from, to time.Time, step time.Duration) ([]domain.Bucket, error) {
+	f.calls++
+	f.call = historyCall{deviceID: deviceID, from: from, to: to, step: step}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.buckets, nil
+}
+
+func (f *fakeRepo) Summary(_ context.Context, deviceID string, from, to time.Time) (domain.Summary, error) {
+	f.calls++
+	f.call = historyCall{deviceID: deviceID, from: from, to: to}
+	if f.err != nil {
+		return domain.Summary{}, f.err
+	}
+	return f.summary, nil
 }
 
 func counterValue(t *testing.T, c prometheus.Counter) float64 {
