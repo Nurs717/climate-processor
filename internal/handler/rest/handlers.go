@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -11,8 +12,12 @@ import (
 )
 
 type api struct {
-	reader Reader
-	now    func() time.Time
+	log      *slog.Logger
+	reader   Reader
+	now      func() time.Time
+	sessions Sessions // nil = every request is anonymous
+	signIn   SignIn   // nil = no sign-in routes
+	secure   bool     // mark the cookies Secure
 }
 
 // latest: GET /api/v1/latest

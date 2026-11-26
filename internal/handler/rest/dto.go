@@ -4,6 +4,7 @@ import (
 	"math"
 	"time"
 
+	"climate-processor/internal/auth"
 	"climate-processor/internal/domain"
 	"climate-processor/internal/service"
 )
@@ -92,4 +93,16 @@ func newStats(from, to time.Time, s domain.Summary) statsDTO {
 		Humidity:    newStat(s.Humidity),
 		Pressure:    newStat(s.Pressure),
 	}
+}
+
+// meDTO answers "who am I": the role the server gives the client, and whether the owner can sign in at all,
+// so that a client can show or hide its sign-in button.
+type meDTO struct {
+	Role          domain.Role `json:"role"`
+	UserID        int64       `json:"user_id,omitempty"` // Telegram user id of the owner
+	SignInEnabled bool        `json:"sign_in_enabled"`
+}
+
+func newMe(id auth.Identity, signInEnabled bool) meDTO {
+	return meDTO{Role: id.Role, UserID: id.UserID, SignInEnabled: signInEnabled}
 }

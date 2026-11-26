@@ -67,6 +67,7 @@ func accessLog(log *slog.Logger) gin.HandlerFunc {
 			"duration_ms", time.Since(start).Milliseconds(),
 			"bytes", max(c.Writer.Size(), 0), // gin reports -1 when nothing was written
 			"client_ip", c.ClientIP(),
+			"role", string(identityOf(c).Role),
 		}
 		if err := c.Errors.Last(); err != nil {
 			attrs = append(attrs, "error", err.Err)
@@ -94,6 +95,9 @@ func recovery(log *slog.Logger) gin.HandlerFunc {
 const (
 	costCheap   = 1
 	costHistory = 5
+	// Starting a sign-in makes the server remember it for ten minutes, and there is room for a limited number of
+	// them; the high price keeps one client from filling that room and locking the owner out.
+	costSignIn = 5
 )
 
 // rateLimit answers 429 with a Retry-After header when the client of the request has used up its tokens.
