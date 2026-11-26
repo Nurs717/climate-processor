@@ -200,3 +200,74 @@ func TestLoadAPIRateLimitFallsBackOnBadValues(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePublicURL(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"empty", "", ""},
+		{"https origin", "https://34-28-22-93.sslip.io", "https://34-28-22-93.sslip.io"},
+		{"trailing slash is cut", "https://climate.example.com/", "https://climate.example.com"},
+		{"spaces are trimmed", "  https://climate.example.com  ", "https://climate.example.com"},
+		{"port is kept", "https://climate.example.com:8443", "https://climate.example.com:8443"},
+		{"http on localhost", "http://localhost:8080", "http://localhost:8080"},
+		{"http on loopback IPv4", "http://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"http on loopback IPv6", "http://[::1]:8080", "http://[::1]:8080"},
+		{"http on a public host is refused", "http://climate.example.com", ""},
+		{"http on a LAN address is refused", "http://192.168.1.10:8080", ""},
+		{"no scheme", "climate.example.com", ""},
+		{"host and port without a scheme", "localhost:8080", ""},
+		{"other scheme", "ftp://climate.example.com", ""},
+		{"a path", "https://climate.example.com/app", ""},
+		{"a query", "https://climate.example.com/?a=1", ""},
+		{"a fragment", "https://climate.example.com/#x", ""},
+		{"credentials", "https://user:pass@climate.example.com", ""},
+		{"no host", "https://", ""},
+		{"not a URL", "https://exa mple.com", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parsePublicURL(tt.raw); got != tt.want {
+				t.Errorf("parsePublicURL(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadOwnerSignInSettings(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "https://34-28-22-93.sslip.io/")
+	t.Setenv("TELEGRAM_OIDC_CLIENT_ID", " 8835632852 ")
+	t.Setenv("TELEGRAM_OIDC_CLIENT_SECRET", "s3cret\n") // a secret read from a file often ends with a newline
+	t.Setenv("SESSION_TTL", "720h")
+
+	cfg := Load()
+
+	if cfg.PublicURL != "https://34-28-22-93.sslip.io" || cfg.TGLoginClientID != "8835632852" ||
+		cfg.TGLoginClientSecret != "s3cret" || cfg.SessionTTL != 720*time.Hour {
+		t.Errorf("got %q, %q, %q, %s", cfg.PublicURL, cfg.TGLoginClientID, cfg.TGLoginClientSecret, cfg.SessionTTL)
+	}
+}
+
+func TestLoadOwnerSignInDefaults(t *testing.T) {
+	unsetenv(t, "PUBLIC_URL", "TELEGRAM_OIDC_CLIENT_ID", "TELEGRAM_OIDC_CLIENT_SECRET", "SESSION_TTL")
+
+	cfg := Load()
+
+	if cfg.PublicURL != "" || cfg.TGLoginClientID != "" || cfg.TGLoginClientSecret != "" {
+		t.Errorf("the sign-in must be unconfigured by default: %q, %q, %q", cfg.PublicURL, cfg.TGLoginClientID, cfg.TGLoginClientSecret)
+	}
+	if cfg.SessionTTL != 30*24*time.Hour {
+		t.Errorf("SessionTTL = %s, want 30 days", cfg.SessionTTL)
+	}
+}
+
+func TestLoadSessionTTLFallsBackOnBadValues(t *testing.T) {
+	for _, bad := range []string{"abc", "0", "-1h", "30d"} { // Go durations have no "d"
+		t.Setenv("SESSION_TTL", bad)
+		if got := Load().SessionTTL; got != 30*24*time.Hour {
+			t.Errorf("SESSION_TTL=%q: got %s, want the default 30 days", bad, got)
+		}
+	}
+}
