@@ -50,6 +50,10 @@ flowchart LR
   cloud VM through an IAP tunnel with `make tunnel` and `make cloud-up`), and a Telegram alert when the
   sensor goes silent.
 
+![Grafana dashboard: ten hours of continuous readings from the cloud VM](docs/dashboard.png)
+
+*The provisioned Grafana dashboard: ten hours of continuous readings from the sensor on 26 November 2026, with the pressure falling steadily.*
+
 Details: [`deploy/gcp/README.md`](deploy/gcp/README.md) and [`infra/README.md`](infra/README.md).
 
 ## Project layout
