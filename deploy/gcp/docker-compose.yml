@@ -60,6 +60,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_ADMIN_CHAT_IDS: ${TELEGRAM_ADMIN_CHAT_IDS:-}
       ACCESS_FILE: /data/access.json # users approved in the bot; the volume keeps them across deployments
+      DB_PATH: /data/climate.db # reading history; the climate-data volume keeps it across deployments
       TIMEZONE: Asia/Almaty
       STALE_AFTER: 5m
     volumes:
