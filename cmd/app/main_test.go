@@ -120,21 +120,67 @@ func TestNewAPIServerServesTheWebAppNextToTheAPI(t *testing.T) {
 	}
 }
 
-func TestNewAPIServerGivesThePageABudgetApartFromTheAPI(t *testing.T) {
-	cfg := &config.Config{HTTPAddr: ":8080", APIRatePerMin: 60, APIRateBurst: 2}
+func TestNewAPIServerGivesTheFilesALimitApartFromTheAPI(t *testing.T) {
+	log, out := capture()
+	cfg := &config.Config{HTTPAddr: ":8080", APIRatePerMin: 60, APIRateBurst: 2, WebRatePerMin: 60, WebRateBurst: 3}
+	srv, err := newAPIServer(log, cfg, fakeReader{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, want := range []int{http.StatusOK, http.StatusOK, http.StatusOK, http.StatusTooManyRequests} {
+		if got := apiRequest(srv.Handler, http.MethodGet, "/app.css").Code; got != want {
+			t.Errorf("file request %d: %d, want %d (a burst of 3)", i+1, got, want)
+		}
+	}
+
+	// The API has its own burst of 2, which the files have not touched.
+	for i, want := range []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests} {
+		if got := call(srv.Handler, "192.0.2.1:1", ""); got != want {
+			t.Errorf("API request %d: %d, want %d (a burst of 2)", i+1, got, want)
+		}
+	}
+	if got := out.String(); !strings.Contains(got, "web_rate_per_minute=60") || !strings.Contains(got, "web_rate_burst=3") {
+		t.Errorf("the settings log must show the limit of the files: %q", got)
+	}
+}
+
+func TestNewAPIServerDoesNotLimitTheFilesWithoutAWebLimit(t *testing.T) {
+	log, out := capture()
+	cfg := &config.Config{HTTPAddr: ":8080", APIRatePerMin: 60, APIRateBurst: 1, WebRatePerMin: 0, WebRateBurst: 1}
+	srv, err := newAPIServer(log, cfg, fakeReader{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 50; i++ {
+		if got := apiRequest(srv.Handler, http.MethodGet, "/app.css").Code; got != http.StatusOK {
+			t.Fatalf("file request %d: %d, want 200 (the files are not limited)", i+1, got)
+		}
+	}
+	if got := out.String(); !strings.Contains(got, "web_rate_per_minute=0") {
+		t.Errorf("the settings log must show that the files are not limited: %q", got)
+	}
+}
+
+func TestNewAPIServerRateZeroSwitchesTheFilesLimitOffToo(t *testing.T) {
+	cfg := &config.Config{HTTPAddr: ":8080", APIRatePerMin: 0, APIRateBurst: 1, WebRatePerMin: 60, WebRateBurst: 1}
 	srv, err := newAPIServer(quiet(), cfg, fakeReader{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for i, want := range []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests} {
-		if got := apiRequest(srv.Handler, http.MethodGet, "/app.css").Code; got != want {
-			t.Errorf("file request %d: %d, want %d", i+1, got, want)
+	for i := 0; i < 50; i++ {
+		if got := apiRequest(srv.Handler, http.MethodGet, "/app.css").Code; got != http.StatusOK {
+			t.Fatalf("file request %d: %d, want 200: API_RATE_PER_MIN=0 switches every limit off", i+1, got)
 		}
 	}
+}
 
-	if got := call(srv.Handler, "192.0.2.1:1", ""); got != http.StatusOK {
-		t.Errorf("the API after the files used up their budget: %d, want 200", got)
+func TestNewAPIServerRejectsAWebLimitWithoutABurst(t *testing.T) {
+	cfg := &config.Config{HTTPAddr: ":8080", APIRatePerMin: 60, APIRateBurst: 1, WebRatePerMin: 60, WebRateBurst: 0}
+	if _, err := newAPIServer(quiet(), cfg, fakeReader{}, nil); err == nil {
+		t.Error("a limiter of the files without a burst must fail the start")
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// limits are the rate limits of the API for its two kinds of clients.
+// limits are the rate limits of the API for its two kinds of clients, and the one of the files of the web app.
 //
 // An anonymous client has the demo limit, counted per IP address. A signed-in owner has the owner limit: it is
 // higher and counted per user, so it does not depend on the network the owner is on. Who a client is becomes known
@@ -22,6 +22,7 @@ import (
 type limits struct {
 	demo  Limiter // nil = anonymous clients are not limited
 	owner Limiter // nil = every client has the demo limit
+	files Limiter // the files of the web app, per IP address; nil = they are not limited
 	now   func() time.Time
 }
 
@@ -56,8 +57,9 @@ func (l limits) settle(cost int) gin.HandlerFunc {
 }
 
 // page serves the files of the web app to the requests that no route of the API has taken. Opening the page takes a
-// handful of files, so they have a budget of their own, per IP address: it must not eat the one of the API. Anything
-// that is not a file of the app falls through to the handlers after this one, which answer 404.
+// dozen files, so they have a limit of their own, per IP address: it must not eat the budget of the API, and the
+// limit of the API must not stop the page from loading. Anything that is not a file of the app falls through to the
+// handlers after this one, which answer 404.
 func (l limits) page(ui UI) gin.HandlerFunc {
 	if ui == nil {
 		return func(*gin.Context) {}
@@ -69,8 +71,8 @@ func (l limits) page(ui UI) gin.HandlerFunc {
 			!ui.Has(r.URL.Path) {
 			return
 		}
-		if l.demo != nil {
-			charge(c, l.demo, l.now(), "static:"+c.ClientIP(), 1)
+		if l.files != nil {
+			charge(c, l.files, l.now(), c.ClientIP(), 1)
 		}
 		if !c.IsAborted() {
 			// Gin starts the answer to an unknown route as a 404, and keeps that status for a handler that writes a

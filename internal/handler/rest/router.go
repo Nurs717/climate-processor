@@ -75,9 +75,13 @@ type Options struct {
 	// takes one token per request of an IP address that sends a session token, which keeps a flood of made-up
 	// tokens away from the session store. It needs Sessions. nil = the owner has the same limit as everybody.
 	OwnerLimiter Limiter
-	// UI serves the web app: its files answer the GET and HEAD requests that no API route takes. Every client has
-	// a budget for them (in Limiter) that is separate from the one of the API. nil = there is no web app.
+	// UI serves the web app: its files answer the GET and HEAD requests that no API route takes. nil = there is no
+	// web app.
 	UI UI
+	// UILimiter limits the requests for the files of the web app, told apart by IP address. It is separate from
+	// Limiter: opening the page takes a dozen files, which must not use up the budget of the API. nil = the files
+	// are not limited, whatever Limiter says.
+	UILimiter Limiter
 	// TrustedProxies are the IPs or CIDR ranges of the reverse proxies in front of the service. Their
 	// X-Forwarded-For header is believed (that is how the real client address is found); from any other
 	// peer it is ignored. Empty = no proxy is trusted, the client is the peer.
@@ -132,7 +136,7 @@ func NewRouter(log *slog.Logger, reader Reader, opts Options) (http.Handler, err
 	}
 	r.Use(requestID(), accessLog(log), recovery(log))
 	limit := func(cost int) gin.HandlerFunc { return rateLimit(opts.Limiter, opts.Now, cost) }
-	lim := limits{demo: opts.Limiter, owner: opts.OwnerLimiter, now: opts.Now}
+	lim := limits{demo: opts.Limiter, owner: opts.OwnerLimiter, files: opts.UILimiter, now: opts.Now}
 	r.NoRoute(lim.page(opts.UI), limit(costCheap), wrap(func(*gin.Context) error {
 		return apperr.New(apperr.CodeNotFound, "rest.NoRoute", "not found")
 	}))

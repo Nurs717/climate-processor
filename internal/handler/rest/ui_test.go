@@ -36,6 +36,8 @@ func (u *fakeUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func withUI(u UI) func(*Options) { return func(o *Options) { o.UI = u } }
 
+func withUILimiter(l Limiter) func(*Options) { return func(o *Options) { o.UILimiter = l } }
+
 func TestAppFilesAnswerTheRequestsNoRouteTakes(t *testing.T) {
 	ui := newFakeUI("/", "/app.css")
 	e := newTestEnv(t, withUI(ui))
@@ -66,22 +68,24 @@ func TestAppFilesAreLoggedLikeAnyRequest(t *testing.T) {
 	}
 }
 
-func TestAppFilesHaveABudgetOfTheirOwn(t *testing.T) {
-	demo := &fakeLimiter{ok: true}
-	e := newTestEnv(t, withUI(newFakeUI("/", "/app.js")), withLimiter(demo))
+func TestAppFilesHaveALimitOfTheirOwn(t *testing.T) {
+	demo, files := &fakeLimiter{ok: true}, &fakeLimiter{ok: true}
+	e := newTestEnv(t, withUI(newFakeUI("/", "/app.js")), withLimiter(demo), withUILimiter(files))
 	e.reader.hasLatest = true
 
 	e.get("/")
 	e.get("/app.js")
 	e.get("/api/v1/latest")
 
-	wantCharges(t, "the demo limit", demo.calls, "static:192.0.2.1/1", "static:192.0.2.1/1", "192.0.2.1/1")
+	wantCharges(t, "the files limit", files.calls, "192.0.2.1/1", "192.0.2.1/1")
+	wantCharges(t, "the demo limit", demo.calls, "192.0.2.1/1")
 }
 
 func TestRefusedFileIsAJSON429AndTheAppIsNotAsked(t *testing.T) {
-	demo := &refusingLimiter{refuse: map[string]time.Duration{"static:192.0.2.1": 3 * time.Second}}
+	files := &refusingLimiter{refuse: map[string]time.Duration{"192.0.2.1": 3 * time.Second}}
+	demo := &fakeLimiter{ok: true}
 	ui := newFakeUI("/")
-	e := newTestEnv(t, withUI(ui), withLimiter(demo))
+	e := newTestEnv(t, withUI(ui), withLimiter(demo), withUILimiter(files))
 
 	rec := e.get("/")
 
@@ -97,13 +101,14 @@ func TestRefusedFileIsAJSON429AndTheAppIsNotAsked(t *testing.T) {
 	if len(ui.served) != 0 {
 		t.Errorf("a refused request reached the app: %v", ui.served)
 	}
-	wantCharges(t, "the demo limit", demo.calls, "static:192.0.2.1/1") // and not once more for the 404 it is not
+	wantCharges(t, "the files limit", files.calls, "192.0.2.1/1") // and not once more for the 404 it is not
+	wantCharges(t, "the demo limit", demo.calls)
 }
 
 func TestUnknownPathIsAJSON404ChargedAsACheapRequest(t *testing.T) {
-	demo := &fakeLimiter{ok: true}
+	demo, files := &fakeLimiter{ok: true}, &fakeLimiter{ok: true}
 	ui := newFakeUI("/")
-	e := newTestEnv(t, withUI(ui), withLimiter(demo))
+	e := newTestEnv(t, withUI(ui), withLimiter(demo), withUILimiter(files))
 
 	rec := e.get("/nowhere.js")
 
@@ -117,6 +122,7 @@ func TestUnknownPathIsAJSON404ChargedAsACheapRequest(t *testing.T) {
 		t.Errorf("the app served %v for a path it does not hold", ui.served)
 	}
 	wantCharges(t, "the demo limit", demo.calls, "192.0.2.1/1")
+	wantCharges(t, "the files limit", files.calls) // not a file: the API's price for a 404
 }
 
 func TestOnlyGETAndHEADReachTheApp(t *testing.T) {
@@ -176,8 +182,13 @@ func TestAPIRoutesWinOverTheApp(t *testing.T) {
 
 // Opening the page must not use up what the dashboard needs to load its data, nor the other way round.
 func TestFilesAndAPIDoNotShareABucket(t *testing.T) {
+	both := func(t *testing.T, burst int) []func(*Options) {
+		return []func(*Options){
+			withUI(newFakeUI("/")), withLimiter(mustLimiter(t, 60, burst)), withUILimiter(mustLimiter(t, 60, burst)),
+		}
+	}
 	t.Run("a busy page leaves the API alone", func(t *testing.T) {
-		e := newTestEnv(t, withUI(newFakeUI("/")), withLimiter(mustLimiter(t, 60, 3)))
+		e := newTestEnv(t, both(t, 3)...)
 		e.reader.hasLatest = true
 
 		for range 3 {
@@ -194,7 +205,7 @@ func TestFilesAndAPIDoNotShareABucket(t *testing.T) {
 		}
 	})
 	t.Run("a busy API leaves the page alone", func(t *testing.T) {
-		e := newTestEnv(t, withUI(newFakeUI("/")), withLimiter(mustLimiter(t, 60, 3)))
+		e := newTestEnv(t, both(t, 3)...)
 		e.reader.hasLatest = true
 
 		for range 3 {
@@ -209,7 +220,7 @@ func TestFilesAndAPIDoNotShareABucket(t *testing.T) {
 		}
 	})
 	t.Run("another address has its own", func(t *testing.T) {
-		e := newTestEnv(t, withUI(newFakeUI("/")), withLimiter(mustLimiter(t, 60, 1)))
+		e := newTestEnv(t, both(t, 1)...)
 
 		e.get("/")
 
@@ -219,15 +230,38 @@ func TestFilesAndAPIDoNotShareABucket(t *testing.T) {
 	})
 }
 
+// The limit of the files stands on its own: it does not need a limit of the API next to it.
+func TestFilesAreLimitedWithoutALimitOfTheAPI(t *testing.T) {
+	files := &refusingLimiter{refuse: map[string]time.Duration{"192.0.2.1": time.Second}}
+	e := newTestEnv(t, withUI(newFakeUI("/")), withUILimiter(files))
+
+	if rec := e.get("/"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", rec.Code)
+	}
+}
+
+// The limit of the API says nothing about the files: without a limit of their own they are not limited at all, so a
+// client that has used up its API budget can still load the page (which then says what is wrong).
+func TestTheLimitOfTheAPIDoesNotApplyToTheFiles(t *testing.T) {
+	demo := &refusingLimiter{refuse: map[string]time.Duration{"192.0.2.1": time.Minute}}
+	e := newTestEnv(t, withUI(newFakeUI("/")), withLimiter(demo))
+
+	if rec := e.get("/"); rec.Code != http.StatusOK {
+		t.Errorf("a file for a client over the API budget: status = %d, want 200", rec.Code)
+	}
+	wantCharges(t, "the demo limit", demo.calls)
+}
+
 // Files are public: a session token neither buys a cheaper price for them nor reaches the session store.
 func TestFilesIgnoreTheSession(t *testing.T) {
-	demo, owner := &fakeLimiter{ok: true}, &fakeLimiter{ok: true}
-	e := newAuthEnv(t, withUI(newFakeUI("/", "/app.css")), withLimiter(demo), withOwnerLimiter(owner))
+	demo, owner, files := &fakeLimiter{ok: true}, &fakeLimiter{ok: true}, &fakeLimiter{ok: true}
+	e := newAuthEnv(t, withUI(newFakeUI("/", "/app.css")), withLimiter(demo), withOwnerLimiter(owner), withUILimiter(files))
 
 	e.do(http.MethodGet, "/", ownerCookie())
 	e.do(http.MethodGet, "/app.css", withCookie(sessionCookie, "junk"))
 
-	wantCharges(t, "the demo limit", demo.calls, "static:192.0.2.1/1", "static:192.0.2.1/1")
+	wantCharges(t, "the files limit", files.calls, "192.0.2.1/1", "192.0.2.1/1")
+	wantCharges(t, "the demo limit", demo.calls)
 	wantCharges(t, "the owner limit", owner.calls)
 	if len(e.sessions.authCalls) != 0 {
 		t.Errorf("a file request reached the session store: %v", e.sessions.authCalls)

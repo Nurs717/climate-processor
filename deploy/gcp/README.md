@@ -199,6 +199,11 @@ is on, and a busy demo client on the same address cannot use it up. `API_OWNER_R
 A request that carries a session token also takes one token per request from the owner budget of its address, before the token is
 checked: a flood of made-up tokens is refused before it reaches the database.
 
+The files of the web app (the page, its scripts, styles and icons) have a limit of their own, counted per client address: `WEB_RATE_PER_MIN`
+(default 600) with a burst of `WEB_RATE_BURST` (default 120), one request per file. Opening the page takes about a dozen files, so a few
+reloads must not use up the budget of the API, and a client that has used up the API budget can still load the page. `WEB_RATE_PER_MIN=0`
+switches this limit off; `API_RATE_PER_MIN=0` switches it off together with all the others.
+
 The deploy script waits only for the service to become healthy, not for Caddy. Check HTTPS after a deployment:
 
 ```bash

@@ -35,6 +35,11 @@ type Config struct {
 	// 0 per minute = the owner is limited like everybody else. With APIRatePerMin = 0 nobody is limited at all.
 	APIOwnerRatePerMin int
 	APIOwnerRateBurst  int
+	// The same for the files of the web app (HTML, scripts, styles, icons), which have a limiter of their own: opening
+	// the page takes a dozen of them, and a few reloads must not use up the budget of the API. Counted per client
+	// address. 0 per minute = the files are not limited. With APIRatePerMin = 0 nobody is limited at all.
+	WebRatePerMin int
+	WebRateBurst  int
 
 	// Owner sign-in with Telegram ("Log In With Telegram", OpenID Connect). It works only when PUBLIC_URL, the
 	// client id and secret and DB_PATH (the sessions are kept there) are all set; without it everybody is an
@@ -90,6 +95,9 @@ func Load() *Config {
 
 		APIOwnerRatePerMin: getEnvInt("API_OWNER_RATE_PER_MIN", 600, 0),
 		APIOwnerRateBurst:  getEnvInt("API_OWNER_RATE_BURST", 100, 1),
+
+		WebRatePerMin: getEnvInt("WEB_RATE_PER_MIN", 600, 0),
+		WebRateBurst:  getEnvInt("WEB_RATE_BURST", 120, 1),
 
 		PublicURL:           parsePublicURL(getEnv("PUBLIC_URL", "")),
 		TGLoginClientID:     strings.TrimSpace(getEnv("TELEGRAM_OIDC_CLIENT_ID", "")),

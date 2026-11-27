@@ -240,8 +240,8 @@ func newOwnerAuth(ctx context.Context, log *slog.Logger, cfg *config.Config, ses
 }
 
 // newAPIServer builds the public HTTP server: the REST API and the web app. Its trusted proxies (to find the real
-// client address), the per-client rate limit, the higher limit of the owner and the owner sign-in (nil = off) come
-// from the configuration.
+// client address), the per-client rate limit, the higher limit of the owner, the limit of the files of the web app and
+// the owner sign-in (nil = off) come from the configuration.
 func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader, owner *ownerAuth) (*http.Server, error) {
 	app, err := web.New()
 	if err != nil {
@@ -257,6 +257,18 @@ func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader, owne
 		opts.Limiter = limiter // assigned only here: a nil *Limiter in the interface would not be "no limit"
 	} else {
 		log.Warn("API_RATE_PER_MIN is 0: the API is not rate limited")
+	}
+	// The files of the web app have a limit of their own, so that a few reloads of the page do not use up the budget
+	// of the API. It goes with the limit of everybody (with API_RATE_PER_MIN=0 nobody is limited) and is off with
+	// WEB_RATE_PER_MIN=0.
+	var webRate, webBurst int // what the files are limited to; 0 = not limited
+	if opts.Limiter != nil && cfg.WebRatePerMin > 0 {
+		webLimiter, err := ratelimit.New(cfg.WebRatePerMin, cfg.WebRateBurst, maxTrackedClients)
+		if err != nil {
+			return nil, fmt.Errorf("web rate limiter: %w", err)
+		}
+		opts.UILimiter = webLimiter
+		webRate, webBurst = cfg.WebRatePerMin, cfg.WebRateBurst
 	}
 	if owner != nil {
 		// Assigned only here, for the same reason as the limiter: a nil pointer in an interface is not "off".
@@ -282,6 +294,8 @@ func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader, owne
 		"rate_burst", cfg.APIRateBurst,
 		"owner_rate_per_minute", ownerRate,
 		"owner_rate_burst", ownerBurst,
+		"web_rate_per_minute", webRate,
+		"web_rate_burst", webBurst,
 		"owner_sign_in", owner != nil)
 
 	router, err := rest.NewRouter(log.With("component", "rest"), reader, opts)

@@ -230,6 +230,50 @@ func TestLoadOwnerRateLimitCanBeSwitchedOff(t *testing.T) {
 	}
 }
 
+func TestLoadWebRateLimit(t *testing.T) {
+	t.Setenv("WEB_RATE_PER_MIN", " 900 ")
+	t.Setenv("WEB_RATE_BURST", "200")
+
+	cfg := Load()
+
+	if cfg.WebRatePerMin != 900 || cfg.WebRateBurst != 200 {
+		t.Errorf("got %d, %d; want 900, 200", cfg.WebRatePerMin, cfg.WebRateBurst)
+	}
+}
+
+func TestLoadWebRateLimitDefaultsLeaveRoomForSeveralReloads(t *testing.T) {
+	unsetenv(t, "WEB_RATE_PER_MIN", "WEB_RATE_BURST")
+
+	cfg := Load()
+
+	if cfg.WebRatePerMin != 600 || cfg.WebRateBurst != 120 {
+		t.Errorf("defaults = %d, %d; want 600, 120", cfg.WebRatePerMin, cfg.WebRateBurst)
+	}
+}
+
+func TestLoadWebRateLimitCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("WEB_RATE_PER_MIN", "0")
+
+	if got := Load().WebRatePerMin; got != 0 {
+		t.Errorf("WEB_RATE_PER_MIN=0 must switch the limit of the files off, got %d", got)
+	}
+}
+
+func TestLoadWebRateLimitFallsBackOnBadValues(t *testing.T) {
+	for _, bad := range []string{"abc", "-1", "1.5"} {
+		t.Setenv("WEB_RATE_PER_MIN", bad)
+		if got := Load().WebRatePerMin; got != 600 {
+			t.Errorf("WEB_RATE_PER_MIN=%q: got %d, want the default 600", bad, got)
+		}
+	}
+	for _, bad := range []string{"abc", "0", "-3"} {
+		t.Setenv("WEB_RATE_BURST", bad)
+		if got := Load().WebRateBurst; got != 120 {
+			t.Errorf("WEB_RATE_BURST=%q: got %d, want the default 120", bad, got)
+		}
+	}
+}
+
 func TestLoadOwnerRateLimitFallsBackOnBadValues(t *testing.T) {
 	for _, bad := range []string{"abc", "-1", "1.5"} {
 		t.Setenv("API_OWNER_RATE_PER_MIN", bad)
