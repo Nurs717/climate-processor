@@ -1,41 +1,402 @@
+/*
+ * Climate dashboard. The temperature is the page: one large figure, everything else stays quiet.
+ * Structure comes from hairlines and spacing, not from boxes. Colours are tokens: the series colours are the
+ * validated categorical palette and identify a measurement (a dot beside its name), they never colour text.
+ * Orange, blue and aqua pass the validator for all pairs in both themes; orange and aqua are below 3:1 on the
+ * light background, which is why every colour always comes with a visible name.
+ */
+
 :root {
-  color-scheme: light dark;
-  --bg: #f6f7f9;
-  --text: #15191e;
-  --muted: #5b6673;
-  --accent: #0b6bcb;
+  color-scheme: light;
+  --bg: #f2f5f6;
+  --ink: #13212b;
+  --muted: #56646f;
+  --hair: rgba(19, 33, 43, 0.14);
+  --focus: #257de0;
+
+  --series-temperature: #f47230;
+  --series-humidity: #257de0;
+  --series-pressure: #00b894;
+
+  --good: #008a17;
+  --warn: #c98600;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1116;
-    --text: #e8ecf1;
-    --muted: #97a3b1;
-    --accent: #6cb2ff;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0e161c;
+    --ink: #e8eef2;
+    --muted: #97a5af;
+    --hair: rgba(255, 255, 255, 0.13);
+    --focus: #338ced;
+
+    --series-temperature: #e76624;
+    --series-humidity: #338ced;
+    --series-pressure: #00a888;
+
+    --good: #0aac23;
+    --warn: #e0a22b;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e161c;
+  --ink: #e8eef2;
+  --muted: #97a5af;
+  --hair: rgba(255, 255, 255, 0.13);
+  --focus: #338ced;
+
+  --series-temperature: #e76624;
+  --series-humidity: #338ced;
+  --series-pressure: #00a888;
+
+  --good: #0aac23;
+  --warn: #e0a22b;
 }
 
 * {
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--text);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  -webkit-text-size-adjust: 100%;
 }
 
 a {
-  color: var(--accent);
+  color: inherit;
+  text-underline-offset: 0.2em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+h1,
+h2,
+p,
+ul {
+  margin: 0;
+  padding: 0;
+}
+
+ul {
+  list-style: none;
 }
 
 .page {
-  max-width: 40rem;
+  max-width: 62rem;
+  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0 auto;
-  padding: 3rem 1rem;
+  padding: max(1.25rem, env(safe-area-inset-top)) max(1.25rem, env(safe-area-inset-right))
+    max(1.5rem, env(safe-area-inset-bottom)) max(1.25rem, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
 }
 
-.muted {
+/* Header */
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.brand {
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.role {
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
   color: var(--muted);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.role[data-role="owner"] {
+  color: var(--ink);
+}
+
+/* The board: the temperature on the left, the other two measurements beside it */
+
+.board {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 2.75rem;
+  margin-top: clamp(1.5rem, 6vh, 4rem);
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.key {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.key-temperature {
+  background: var(--series-temperature);
+}
+
+.key-humidity {
+  background: var(--series-humidity);
+}
+
+.key-pressure {
+  background: var(--series-pressure);
+}
+
+/* The figures are proportional: tabular digits look loose at this size. */
+
+.hero-value {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 0.4rem;
+}
+
+.hero-value .number {
+  /* The digit has some air on its left side: pull it back so that it lines up with the label above. */
+  margin-left: -0.05em;
+  font-size: clamp(5.5rem, 27vw, 9.75rem);
+  font-weight: 500;
+  line-height: 0.95;
+  letter-spacing: -0.045em;
+}
+
+.hero-value .unit {
+  margin: 0.55em 0 0 0.12em;
+  color: var(--muted);
+  font-size: clamp(1.5rem, 7vw, 2.5rem);
+  font-weight: 400;
+  line-height: 1;
+}
+
+/* The unit never breaks in the middle ("mm" / "Hg"): on a very narrow screen it moves under the number as a whole. */
+.value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.value .number {
+  font-size: clamp(1.875rem, 8.4vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.value .unit {
+  color: var(--muted);
+  font-size: 0.9375rem;
+  white-space: nowrap;
+}
+
+/* Old numbers stay readable (3:1 on the background is the floor for large text); the sentence below says why they are pale. */
+.board[data-dimmed="true"] .number,
+.board[data-dimmed="true"] .hero-value .unit {
+  opacity: 0.55;
+}
+
+/* Nothing to show yet: the dashes are a placeholder, not a reading. A dash has no air on its left to pull back. */
+.board[data-empty="true"] .hero-value .number {
+  margin-left: 0;
+}
+
+.board[data-empty="true"] .hero-value,
+.board[data-empty="true"] .value {
+  opacity: 0.45;
+}
+
+/* Status: a shape and a sentence, so the state never rests on colour alone */
+
+.status {
+  display: flex;
+  align-items: flex-start; /* a sentence of two lines keeps its mark beside the first one */
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+.status-mark {
+  width: 0.65rem;
+  height: 0.65rem;
+  margin-top: 0.375rem;
+  flex: none;
+  background: var(--muted);
+  border-radius: 50%;
+}
+
+.status[data-state="loading"] .status-mark {
+  background: none;
+  border: 2px solid var(--muted);
+}
+
+.status[data-state="live"] .status-mark {
+  background: var(--good);
+}
+
+.status[data-state="empty"] .status-mark {
+  background: none;
+  border: 2px solid var(--muted);
+  border-radius: 2px;
+}
+
+.status[data-state="stale"] .status-mark,
+.status[data-state="offline"] .status-mark,
+.status[data-state="limited"] .status-mark {
+  width: 0.8rem;
+  height: 0.7rem;
+  background: var(--warn);
+  border-radius: 0;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+.status[data-state="stale"],
+.status[data-state="offline"],
+.status[data-state="limited"] {
+  color: var(--ink);
+}
+
+/* Humidity and pressure: side by side on a phone, stacked beside the temperature on a wide screen */
+
+.side {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--hair);
+}
+
+.tile {
+  min-width: 0;
+  padding-top: 1.25rem;
+}
+
+.tile + .tile {
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--hair);
+}
+
+.units {
+  display: inline-flex;
+  margin-top: 0.9rem;
+  border: 1px solid var(--hair);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.unit-button {
+  min-height: 2.75rem;
+  padding: 0 0.9rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.unit-button + .unit-button {
+  border-left: 1px solid var(--hair);
+}
+
+.unit-button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--bg);
+  cursor: default;
+}
+
+.unit-button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Footer */
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 3.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--hair);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.links {
+  display: flex;
+  gap: 1.25rem;
+}
+
+.notice {
+  margin-top: 2rem;
+  color: var(--muted);
+}
+
+/* The narrowest phones: the two unit buttons must still fit into half of the screen. */
+@media (max-width: 22.5rem) {
+  .unit-button {
+    padding: 0 0.6rem;
+  }
+}
+
+@media (min-width: 48rem) {
+  .page {
+    padding-left: max(2.5rem, env(safe-area-inset-left));
+    padding-right: max(2.5rem, env(safe-area-inset-right));
+  }
+
+  .board {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    column-gap: 4.5rem;
+    align-items: start;
+  }
+
+  .side {
+    grid-template-columns: 1fr;
+    border-top: 0;
+  }
+
+  .tile {
+    padding-top: 0;
+    padding-bottom: 1.75rem;
+  }
+
+  .tile + .tile {
+    padding-left: 0;
+    padding-top: 1.75rem;
+    padding-bottom: 0;
+    border-left: 0;
+    border-top: 1px solid var(--hair);
+  }
 }

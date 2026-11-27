@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -270,6 +271,43 @@ func TestEmbeddedApp(t *testing.T) {
 					t.Errorf("%s refers to %s, which the app does not hold", path, target)
 				}
 			}
+		}
+	})
+
+	// A browser finds the modules of a script by their URL, and only when the script runs. A typo in one name
+	// would otherwise show up as a blank page, not as a failing build.
+	t.Run("every module it imports is there", func(t *testing.T) {
+		from := regexp.MustCompile(`(?m)^\s*(?:import|export)\s[^;'"]*?\bfrom\s*['"]([^'"]+)['"]`)
+		bare := regexp.MustCompile(`(?m)^\s*import\s*['"]([^'"]+)['"]`)
+		found := 0
+		for name, f := range app.files {
+			if !strings.Contains(f.contentType, "javascript") {
+				continue
+			}
+			var targets []string
+			for _, re := range []*regexp.Regexp{from, bare} {
+				for _, m := range re.FindAllStringSubmatch(string(f.body), -1) {
+					targets = append(targets, m[1])
+				}
+			}
+			for _, target := range targets {
+				found++
+				// There is no import map or bundler: only a path to a file will do ("lodash" would not).
+				if !strings.HasPrefix(target, "./") && !strings.HasPrefix(target, "../") && !strings.HasPrefix(target, "/") {
+					t.Errorf("%s imports %q, which a browser cannot find (it is not a path)", name, target)
+					continue
+				}
+				resolved := target
+				if !strings.HasPrefix(target, "/") {
+					resolved = path.Join(path.Dir(name), target)
+				}
+				if !app.Has(resolved) {
+					t.Errorf("%s imports %s, which the app does not hold", name, resolved)
+				}
+			}
+		}
+		if found == 0 {
+			t.Fatal("found no imports at all: the pattern no longer matches how the scripts are written")
 		}
 	})
 
