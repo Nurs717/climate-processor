@@ -1,6 +1,19 @@
 // Entry point: keeps the board and the history up to date and remembers the pressure unit and the range.
 
-import { getLatest, getMe, getReadings, getStats } from './api.js';
+import {
+  ME_REFRESH_MS,
+  accountDelay,
+  describeAccount,
+  initialAccount,
+  onMe,
+  onSignOutFailed,
+  onSignOutStarted,
+  onSignedOut,
+  readSignIn,
+  withNotice,
+  withoutSignIn,
+} from './account.js';
+import { getLatest, getMe, getReadings, getStats, signOut } from './api.js';
 import { createHistoryView } from './chart-view.js';
 import { DEFAULT_PRESSURE_UNIT, isPressureUnit } from './format.js';
 import {
@@ -48,6 +61,7 @@ let unit = load(UNIT_KEY, isPressureUnit, DEFAULT_PRESSURE_UNIT);
 let state = initialState;
 let history = { ...initialHistory, range: load(RANGE_KEY, isRange, DEFAULT_RANGE) };
 let dayStats = null;
+let account = initialAccount;
 let failures = 0;
 let historyRequest = null; // the AbortController of the request for the history that is under way
 
@@ -56,6 +70,10 @@ const visible = () => document.visibilityState === 'visible';
 function renderBoard() {
   view.render(describe(state, performance.now()), unit);
   view.renderDayRange(dayStats, unit);
+}
+
+function renderAccount() {
+  view.renderAccount(describeAccount(account));
 }
 
 function renderHistory() {
@@ -120,7 +138,23 @@ const statsLoop = createLoop(
   { visible, staleAfterMs: statsDelay(null) },
 );
 
-const loops = [latestLoop, historyLoop, statsLoop];
+// Who is looking: the role is shown in the corner. The session of the owner ends by itself after a day, and a page that
+// stays open (an installed app does) would go on saying "Signed in", so it asks again now and then. Not knowing the role
+// is no reason to fail: the corner stays empty.
+const accountLoop = createLoop(
+  async () => {
+    try {
+      account = onMe(account, await getMe());
+      renderAccount();
+      return accountDelay(null);
+    } catch (err) {
+      return accountDelay(err);
+    }
+  },
+  { visible, staleAfterMs: ME_REFRESH_MS },
+);
+
+const loops = [latestLoop, historyLoop, statsLoop, accountLoop];
 
 view.onUnitPicked((picked) => {
   if (!isPressureUnit(picked) || picked === unit) return;
@@ -140,6 +174,27 @@ historyView.onRangePicked((picked) => {
 
 historyView.onResize(renderHistory);
 
+view.onSignOut(async () => {
+  if (account.signingOut) return; // the button only looks pressed while the server is being asked
+  account = onSignOutStarted(account);
+  renderAccount();
+  let done = false;
+  try {
+    await signOut();
+    done = true;
+  } catch {
+    // The session is still alive on the server: the sentence says so, and the button works again.
+  }
+  account = done ? onSignedOut(account) : onSignOutFailed(account);
+  renderAccount();
+  if (done) accountLoop.restart(); // ask what the server says now
+});
+
+view.onAlertDismissed(() => {
+  account = withNotice(account, null);
+  renderAccount();
+});
+
 // A hidden tab asks for nothing: the dashboard is not being read, and every request costs the server something.
 document.addEventListener('visibilitychange', () => {
   if (!visible()) {
@@ -158,11 +213,20 @@ setInterval(() => {
   historyView.renderStatus(describeHistory(history, performance.now()));
 }, 1000);
 
-// Who is looking: the role is shown in the corner. Not knowing it is no reason to fail.
-getMe()
-  .then((me) => view.showRole(me))
-  .catch(() => {});
+// A sign-in that failed sends the browser home as /?signin=<reason>. The sentence is shown once, and the reason is taken
+// off the address, so that a reload or a link that is passed on does not repeat it. (The name "history" is the state of
+// the charts in this file, hence window.history.)
+const signIn = readSignIn(location.search);
+if (signIn.present) {
+  account = withNotice(account, signIn.message);
+  try {
+    window.history.replaceState(null, '', location.pathname + withoutSignIn(location.search) + location.hash);
+  } catch {
+    // The address keeps the reason. The sentence is on the page all the same.
+  }
+}
 
 renderBoard();
 renderHistory();
+renderAccount();
 for (const loop of loops) loop.start();

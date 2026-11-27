@@ -11,6 +11,7 @@ import {
   parseReadings,
   parseRetryAfter,
   parseStats,
+  signOut,
 } from '../static/api.js';
 
 afterEach(() => mock.restoreAll());
@@ -223,6 +224,98 @@ describe('getMe', () => {
 
     serverSays(() => answer('{}', { status: 429, headers: { 'Retry-After': '9' } }));
     await assert.rejects(getMe(), isApiError('limited', { retryAfterMs: 9_000 }));
+  });
+
+  it('asks again after a 401: the session has ended, its cookie is gone, and the browser is a visitor now', async () => {
+    const replies = [
+      () => answer({ error: { code: 'unauthorized' } }, { status: 401 }),
+      () => answer({ role: 'demo', sign_in_enabled: true }),
+    ];
+    const fetchMock = serverSays(() => replies.shift()());
+
+    assert.deepEqual(await getMe(), { role: 'demo', signInEnabled: true });
+    assert.equal(fetchMock.mock.callCount(), 2);
+  });
+
+  it('asks only once more: a second 401 is an answer', async () => {
+    const fetchMock = serverSays(() => answer('{}', { status: 401 }));
+
+    await assert.rejects(getMe(), isApiError('server', { status: 401 }));
+    assert.equal(fetchMock.mock.callCount(), 2);
+  });
+
+  it('does not ask again after any other failure', async () => {
+    for (const status of [403, 500, 503]) {
+      const fetchMock = serverSays(() => answer('{}', { status }));
+      await assert.rejects(getMe(), isApiError('server', { status }), String(status));
+      assert.equal(fetchMock.mock.callCount(), 1, String(status));
+      mock.restoreAll();
+    }
+    const fetchMock = mock.method(globalThis, 'fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    await assert.rejects(getMe(), isApiError('network'));
+    assert.equal(fetchMock.mock.callCount(), 1);
+  });
+});
+
+describe('signOut', () => {
+  it('posts to the logout route of the server, with the cookie', async () => {
+    const fetchMock = serverSays(() => new Response(null, { status: 204 }));
+
+    assert.equal(await signOut(), undefined);
+
+    const [path, init] = fetchMock.mock.calls[0].arguments;
+    assert.equal(path, '/api/v1/auth/logout');
+    assert.equal(init.method, 'POST');
+    assert.equal(init.credentials, 'same-origin');
+    assert.equal(init.cache, 'no-store');
+    assert.ok(init.signal instanceof AbortSignal);
+    assert.equal(fetchMock.mock.callCount(), 1);
+  });
+
+  it('does not need a body in the answer, and takes any 2xx for done', async () => {
+    for (const status of [200, 204]) {
+      serverSays(() => new Response(status === 200 ? 'not json' : null, { status }));
+      await assert.doesNotReject(signOut(), String(status));
+      mock.restoreAll();
+    }
+  });
+
+  it('fails when the server cannot end the session, so that the person can try again', async () => {
+    for (const status of [500, 503, 401]) {
+      serverSays(() => answer({ error: { code: 'unavailable' } }, { status }));
+      await assert.rejects(signOut(), isApiError('server', { status }), String(status));
+      mock.restoreAll();
+    }
+  });
+
+  it('fails when the server has no sign-in at all (a 404 is not "done")', async () => {
+    serverSays(() => answer('{}', { status: 404 }));
+    await assert.rejects(signOut(), isApiError('server', { status: 404 }));
+  });
+
+  it('tells a busy server from an unreachable one', async () => {
+    serverSays(() => answer('{}', { status: 429, headers: { 'Retry-After': '12' } }));
+    await assert.rejects(signOut(), isApiError('limited', { retryAfterMs: 12_000 }));
+    mock.restoreAll();
+
+    mock.method(globalThis, 'fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    await assert.rejects(signOut(), isApiError('network'));
+  });
+
+  it('gives up when the server does not answer in time', async () => {
+    mock.method(
+      globalThis,
+      'fetch',
+      (_path, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+    );
+    await assert.rejects(signOut({ timeoutMs: 20 }), isApiError('network'));
   });
 });
 

@@ -109,9 +109,10 @@ ul {
 
 .top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.25rem 1rem;
 }
 
 .brand {
@@ -131,6 +132,74 @@ ul {
 
 .role[data-role="owner"] {
   color: var(--ink);
+}
+
+/* The role says who is looking; the button beside it is what the person can do about it. A pill is a statement, a
+   rounded rectangle is a button, as in the unit and range pickers. */
+.account {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.account-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--hair);
+  border-radius: 0.5rem;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.account-button[aria-disabled="true"] {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* Something went wrong and the person can do something about it: a shape and a sentence, like the status line. */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  border-bottom: 1px solid var(--hair);
+  font-size: 0.9375rem;
+}
+
+.alert-mark {
+  width: 0.8rem;
+  height: 0.7rem;
+  margin-top: 0.85rem;
+  flex: none;
+  background: var(--warn);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+.alert-text {
+  flex: 1;
+  min-width: 0;
+  padding: 0.6rem 0;
+}
+
+.alert-close {
+  flex: none;
+  min-height: 2.75rem;
+  padding: 0 0 0 0.5rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.875rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
 }
 
 /* The board: the temperature on the left, the other two measurements beside it */

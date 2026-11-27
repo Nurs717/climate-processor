@@ -22,7 +22,13 @@ export function createView(doc) {
     pressureUnit: byId('pressure-unit'),
     status: byId('status'),
     statusText: byId('status-text'),
+    account: byId('account'),
     role: byId('role'),
+    signIn: byId('sign-in'),
+    signOut: byId('sign-out'),
+    alert: byId('alert'),
+    alertText: byId('alert-text'),
+    alertClose: byId('alert-close'),
   };
   const dayRanges = Object.fromEntries(METRICS.map((metric) => [metric.key, byId(`${metric.key}-range`)]));
   const unitButtons = [...doc.querySelectorAll('.unit-button')];
@@ -43,6 +49,10 @@ export function createView(doc) {
       element.setAttribute(name, value);
       known[name] = value;
     }
+  };
+
+  const setHidden = (element, hidden) => {
+    if (element.hidden !== hidden) element.hidden = hidden;
   };
 
   return {
@@ -82,12 +92,34 @@ export function createView(doc) {
       }
     },
 
-    /** @param {{role: string}} me the answer of /api/v1/auth/me */
-    showRole(me) {
-      const owner = me.role === 'owner';
-      els.role.textContent = owner ? 'Signed in as owner' : 'Demo view, read-only';
-      els.role.dataset.role = owner ? 'owner' : 'demo';
-      els.role.hidden = false;
+    /**
+     * The role in the corner with its button, and the sentence about a sign-in that did not work.
+     * @param {import('./account.js').AccountDescription} account
+     */
+    renderAccount(account) {
+      const hadFocus = doc.activeElement === els.signOut;
+      setHidden(els.account, !account.visible);
+      setText(els.role, account.label);
+      setAttribute(els.role, 'data-role', account.role);
+      setHidden(els.signIn, !account.signIn);
+      setHidden(els.signOut, account.signOut === 'hidden');
+      setText(els.signOut, account.signOut === 'busy' ? 'Signing out…' : 'Sign out');
+      // Not "disabled": a button that is disabled while it has the focus drops it.
+      setAttribute(els.signOut, 'aria-disabled', String(account.signOut === 'busy'));
+      setHidden(els.alert, account.notice === null);
+      setText(els.alertText, account.notice ?? '');
+      // The button the person has just pressed is gone: the focus goes to what took its place.
+      if (hadFocus && account.signOut === 'hidden' && account.signIn) els.signIn.focus();
+    },
+
+    /** @param {() => void} handler called when the person presses "Sign out" */
+    onSignOut(handler) {
+      els.signOut.addEventListener('click', () => handler());
+    },
+
+    /** @param {() => void} handler called when the person dismisses the sentence about a problem */
+    onAlertDismissed(handler) {
+      els.alertClose.addEventListener('click', () => handler());
     },
 
     /** @param {(unit: string) => void} handler called with the key of the unit the person picked */

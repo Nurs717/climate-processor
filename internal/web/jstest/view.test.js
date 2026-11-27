@@ -33,6 +33,10 @@ class FakeElement {
     this.listeners.push(handler);
   }
 
+  focus() {
+    this.focused = true;
+  }
+
   click() {
     for (const handler of this.listeners) handler();
   }
@@ -40,12 +44,16 @@ class FakeElement {
 
 function fakePage() {
   const ids = [
-    'board', 'temperature', 'humidity', 'pressure', 'pressure-unit', 'status', 'status-text', 'role',
+    'board', 'temperature', 'humidity', 'pressure', 'pressure-unit', 'status', 'status-text',
+    'account', 'role', 'sign-in', 'sign-out', 'alert', 'alert-text', 'alert-close',
     'temperature-range', 'humidity-range', 'pressure-range',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
-  // As in index.html: the role is shown once it is known, and so are the ranges of the last day.
-  for (const id of ['role', 'temperature-range', 'humidity-range', 'pressure-range']) elements[id].hidden = true;
+  // As in index.html: the account and its buttons are shown once the role is known, the sentence about a problem
+  // when there is one, and so are the ranges of the last day.
+  for (const id of ['account', 'sign-in', 'sign-out', 'alert', 'temperature-range', 'humidity-range', 'pressure-range']) {
+    elements[id].hidden = true;
+  }
   const buttons = [new FakeElement({ unit: 'mmhg' }), new FakeElement({ unit: 'hpa' })];
   const doc = {
     titleWrites: 0,
@@ -57,6 +65,7 @@ function fakePage() {
       this._title = value;
       this.titleWrites += 1;
     },
+    activeElement: null,
     getElementById: (id) => elements[id] ?? null,
     querySelectorAll: (selector) => (selector === '.unit-button' ? buttons : []),
   };
@@ -223,23 +232,140 @@ describe('renderDayRange', () => {
   });
 });
 
-describe('showRole', () => {
-  it('names the owner', () => {
-    const { doc, el } = fakePage();
-    createView(doc).showRole({ role: 'owner' });
+describe('renderAccount', () => {
+  const account = (changes = {}) => ({
+    visible: true, role: 'demo', label: 'Demo view', signIn: true, signOut: 'hidden', notice: null, ...changes,
+  });
+  const owner = account({ role: 'owner', label: 'Signed in', signIn: false, signOut: 'ready' });
+  const shown = (el) => ['account', 'sign-in', 'sign-out', 'alert'].map((id) => !el[id].hidden);
 
-    assert.equal(el.role.textContent, 'Signed in as owner');
-    assert.equal(el.role.dataset.role, 'owner');
-    assert.equal(el.role.hidden, false);
+  it('shows nothing before the role is known', () => {
+    const { doc, el } = fakePage();
+    createView(doc).renderAccount(account({ visible: false, label: '', signIn: false }));
+
+    assert.deepEqual(shown(el), [false, false, false, false]);
   });
 
-  it('treats everyone else as a visitor of the demo', () => {
+  it('names a visitor and offers the sign-in', () => {
     const { doc, el } = fakePage();
-    for (const role of ['demo', 'member', undefined]) {
-      createView(doc).showRole({ role });
-      assert.equal(el.role.textContent, 'Demo view, read-only', String(role));
-      assert.equal(el.role.dataset.role, 'demo');
-    }
+    createView(doc).renderAccount(account());
+
+    assert.equal(el.role.text, 'Demo view');
+    assert.equal(el.role.attributes['data-role'], 'demo');
+    assert.deepEqual(shown(el), [true, true, false, false]);
+  });
+
+  it('names the owner and offers the sign-out', () => {
+    const { doc, el } = fakePage();
+    createView(doc).renderAccount(owner);
+
+    assert.equal(el.role.text, 'Signed in');
+    assert.equal(el.role.attributes['data-role'], 'owner');
+    assert.equal(el['sign-out'].text, 'Sign out');
+    assert.equal(el['sign-out'].attributes['aria-disabled'], 'false');
+    assert.deepEqual(shown(el), [true, false, true, false]);
+  });
+
+  it('shows that the server is being asked, without taking the focus from the button', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderAccount(owner);
+    view.renderAccount({ ...owner, signOut: 'busy' });
+
+    assert.equal(el['sign-out'].text, 'Signing out…');
+    assert.equal(el['sign-out'].attributes['aria-disabled'], 'true');
+    assert.equal(el['sign-out'].hidden, false);
+    assert.notEqual(el['sign-out'].disabled, true, 'a disabled button that has the focus loses it');
+
+    view.renderAccount(owner);
+    assert.equal(el['sign-out'].text, 'Sign out');
+    assert.equal(el['sign-out'].attributes['aria-disabled'], 'false');
+  });
+
+  it('writes the sentence about a problem, and takes it away', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderAccount(account({ notice: "Couldn't sign out. Try again." }));
+
+    assert.equal(el['alert-text'].text, "Couldn't sign out. Try again.");
+    assert.equal(el.alert.hidden, false);
+
+    view.renderAccount(account());
+    assert.equal(el['alert-text'].text, '');
+    assert.equal(el.alert.hidden, true);
+  });
+
+  it('puts the sentence in as text: markup in it stays markup', () => {
+    const { doc, el } = fakePage();
+    createView(doc).renderAccount(account({ notice: '<img src=x onerror=alert(1)>' }));
+
+    assert.equal(el['alert-text'].text, '<img src=x onerror=alert(1)>');
+  });
+
+  it('hands the focus to the sign-in link when the sign-out button the person pressed goes away', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderAccount(owner);
+    doc.activeElement = el['sign-out'];
+
+    view.renderAccount(account());
+    assert.equal(el['sign-in'].focused, true);
+  });
+
+  it('leaves the focus alone when the person was somewhere else', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderAccount(owner);
+    doc.activeElement = el['alert-close'];
+
+    view.renderAccount(account());
+    assert.equal(el['sign-in'].focused, undefined);
+  });
+
+  it('does not move the focus while the sign-out button is still shown', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderAccount(owner);
+    doc.activeElement = el['sign-out'];
+
+    view.renderAccount({ ...owner, signIn: true }); // not a state the page gets to: the button decides, not the link
+    assert.equal(el['sign-in'].focused, undefined);
+  });
+
+  it('leaves the focus on the button while it is still there (a sign-out that failed)', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderAccount({ ...owner, signOut: 'busy' });
+    doc.activeElement = el['sign-out'];
+
+    view.renderAccount({ ...owner, notice: "Couldn't sign out. Try again." });
+    assert.equal(el['sign-in'].focused, undefined);
+  });
+
+  it('touches nothing when nothing changed, so that it can be called as often as the page is drawn', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderAccount(owner);
+
+    const all = Object.values(el);
+    const before = all.map((e) => e.writes);
+    view.renderAccount({ ...owner });
+    assert.deepEqual(all.map((e) => e.writes), before);
+  });
+});
+
+describe('onSignOut and onAlertDismissed', () => {
+  it('tell when the person presses the button', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    const calls = [];
+    view.onSignOut((...args) => calls.push(['sign-out', args.length]));
+    view.onAlertDismissed((...args) => calls.push(['dismiss', args.length]));
+
+    el['sign-out'].click();
+    el['alert-close'].click();
+    el['sign-out'].click();
+    assert.deepEqual(calls, [['sign-out', 0], ['dismiss', 0], ['sign-out', 0]]);
   });
 });
 

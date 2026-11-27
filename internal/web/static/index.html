@@ -16,14 +16,27 @@
   <link rel="modulepreload" href="/chart.js">
   <link rel="modulepreload" href="/chart-view.js">
   <link rel="modulepreload" href="/loop.js">
+  <link rel="modulepreload" href="/account.js">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
   <div class="page">
     <header class="top">
       <h1 class="brand">Climate</h1>
-      <p class="role" id="role" hidden></p>
+      <div class="account" id="account" hidden>
+        <p class="role" id="role" data-role="demo"></p>
+        <a class="account-button" id="sign-in" href="/api/v1/auth/telegram/login" hidden>Owner sign-in</a>
+        <button type="button" class="account-button" id="sign-out" aria-disabled="false" hidden>Sign out</button>
+      </div>
     </header>
+
+    <div class="alerts" role="status">
+      <p class="alert" id="alert" hidden>
+        <span class="alert-mark" aria-hidden="true"></span>
+        <span class="alert-text" id="alert-text"></span>
+        <button type="button" class="alert-close" id="alert-close">Dismiss</button>
+      </p>
+    </div>
 
     <main class="content">
       <div class="board" id="board" data-dimmed="false" data-empty="false">

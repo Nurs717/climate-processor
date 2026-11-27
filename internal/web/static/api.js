@@ -31,13 +31,15 @@ export function parseRetryAfter(header) {
 }
 
 /**
- * GET path and read the JSON answer.
+ * Sends the request and reads the answer.
+ * @param {string} method
  * @param {string} path
  * @param {number} timeoutMs
- * @param {AbortSignal} [signal] lets the caller give up on the request (the answer is no longer wanted)
+ * @param {AbortSignal|undefined} signal lets the caller give up on the request (the answer is no longer wanted)
+ * @param {boolean} readJSON false for an answer that has no body
  * @returns {Promise<{status: number, body: unknown}>} for an answer with a 2xx status or 404
  */
-async function getJSON(path, timeoutMs, signal) {
+async function call(method, path, timeoutMs, signal, readJSON) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const onAbort = () => controller.abort();
@@ -47,6 +49,7 @@ async function getJSON(path, timeoutMs, signal) {
     let response;
     try {
       response = await fetch(path, {
+        method,
         signal: controller.signal,
         headers: { Accept: 'application/json' },
         credentials: 'same-origin',
@@ -63,6 +66,7 @@ async function getJSON(path, timeoutMs, signal) {
     }
     if (response.status === 404) return { status: 404, body: null };
     if (!response.ok) throw new ApiError('server', { status: response.status });
+    if (!readJSON) return { status: response.status, body: null };
     try {
       return { status: response.status, body: await response.json() };
     } catch {
@@ -73,6 +77,9 @@ async function getJSON(path, timeoutMs, signal) {
     signal?.removeEventListener('abort', onAbort);
   }
 }
+
+/** GET path and read the JSON answer. */
+const getJSON = (path, timeoutMs, signal) => call('GET', path, timeoutMs, signal, true);
 
 /**
  * The latest reading in the shape the page uses.
@@ -100,11 +107,29 @@ export async function getLatest({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   return parseLatest(body);
 }
 
-/** GET /api/v1/auth/me: the role the server gives this browser. */
-export async function getMe({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function askMe(timeoutMs) {
   const { status, body } = await getJSON('/api/v1/auth/me', timeoutMs);
   if (status === 404 || typeof body?.role !== 'string') throw new ApiError('server', { status });
   return { role: body.role, signInEnabled: body.sign_in_enabled === true };
+}
+
+/**
+ * GET /api/v1/auth/me: the role the server gives this browser. A session that has ended is answered with a 401 and its
+ * cookie is taken away, so the second question is the one that finds out the browser is a visitor now.
+ */
+export async function getMe({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  try {
+    return await askMe(timeoutMs);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return askMe(timeoutMs);
+    throw err;
+  }
+}
+
+/** POST /api/v1/auth/logout: ends the session of this browser. Signing out twice, or without a session, is fine. */
+export async function signOut({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const { status } = await call('POST', '/api/v1/auth/logout', timeoutMs, undefined, false);
+  if (status === 404) throw new ApiError('server', { status }); // the server has no sign-in
 }
 
 function parseTime(value) {
