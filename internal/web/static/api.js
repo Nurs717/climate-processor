@@ -34,11 +34,15 @@ export function parseRetryAfter(header) {
  * GET path and read the JSON answer.
  * @param {string} path
  * @param {number} timeoutMs
+ * @param {AbortSignal} [signal] lets the caller give up on the request (the answer is no longer wanted)
  * @returns {Promise<{status: number, body: unknown}>} for an answer with a 2xx status or 404
  */
-async function getJSON(path, timeoutMs) {
+async function getJSON(path, timeoutMs, signal) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
   try {
     let response;
     try {
@@ -66,6 +70,7 @@ async function getJSON(path, timeoutMs) {
     }
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -100,4 +105,65 @@ export async function getMe({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const { status, body } = await getJSON('/api/v1/auth/me', timeoutMs);
   if (status === 404 || typeof body?.role !== 'string') throw new ApiError('server', { status });
   return { role: body.role, signInEnabled: body.sign_in_enabled === true };
+}
+
+function parseTime(value) {
+  const ms = typeof value === 'string' ? Date.parse(value) : NaN;
+  if (!Number.isFinite(ms)) throw new ApiError('server');
+  return ms;
+}
+
+function parseStat(stat) {
+  const { avg, min, max } = stat ?? {};
+  if (![avg, min, max].every(Number.isFinite)) throw new ApiError('server');
+  return { avg, min, max };
+}
+
+/**
+ * The windows of GET /api/v1/readings in the shape the charts use. Windows without readings are not in the answer,
+ * so a gap in the data is a gap between two points.
+ * @param {unknown} body
+ */
+export function parseReadings(body) {
+  const stepSeconds = body?.step_seconds;
+  if (!Array.isArray(body?.points) || !Number.isFinite(stepSeconds) || stepSeconds <= 0) throw new ApiError('server');
+  const points = body.points
+    .map((point) => ({
+      t: parseTime(point?.time),
+      count: Number.isFinite(point.count) && point.count > 0 ? point.count : 1,
+      temperature: parseStat(point.temperature_c),
+      humidity: parseStat(point.humidity_percent),
+      pressure: parseStat(point.pressure_pa),
+    }))
+    .sort((a, b) => a.t - b.t);
+  return { from: parseTime(body.from), to: parseTime(body.to), stepMs: stepSeconds * 1000, points };
+}
+
+/**
+ * The aggregate of GET /api/v1/stats, or null when the interval holds no readings.
+ * @param {unknown} body
+ */
+export function parseStats(body) {
+  if (!Number.isFinite(body?.count) || body.count < 0) throw new ApiError('server');
+  if (body.count === 0) return null;
+  return {
+    count: body.count,
+    temperature: parseStat(body.temperature_c),
+    humidity: parseStat(body.humidity_percent),
+    pressure: parseStat(body.pressure_pa),
+  };
+}
+
+/** GET /api/v1/readings?range=...: the history for a chart. The server chooses the step. */
+export async function getReadings(range, { timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}) {
+  const { status, body } = await getJSON(`/api/v1/readings?range=${encodeURIComponent(range)}`, timeoutMs, signal);
+  if (status === 404) throw new ApiError('server', { status });
+  return parseReadings(body);
+}
+
+/** GET /api/v1/stats?range=...: lowest, average and highest value over a range, or null when it holds no readings. */
+export async function getStats(range, { timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}) {
+  const { status, body } = await getJSON(`/api/v1/stats?range=${encodeURIComponent(range)}`, timeoutMs, signal);
+  if (status === 404) throw new ApiError('server', { status });
+  return parseStats(body);
 }

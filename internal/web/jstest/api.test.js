@@ -1,7 +1,17 @@
 import { afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ApiError, getLatest, getMe, parseLatest, parseRetryAfter } from '../static/api.js';
+import {
+  ApiError,
+  getLatest,
+  getMe,
+  getReadings,
+  getStats,
+  parseLatest,
+  parseReadings,
+  parseRetryAfter,
+  parseStats,
+} from '../static/api.js';
 
 afterEach(() => mock.restoreAll());
 
@@ -213,5 +223,215 @@ describe('getMe', () => {
 
     serverSays(() => answer('{}', { status: 429, headers: { 'Retry-After': '9' } }));
     await assert.rejects(getMe(), isApiError('limited', { retryAfterMs: 9_000 }));
+  });
+});
+
+const READINGS = {
+  from: '2026-11-26T10:00:00Z',
+  to: '2026-11-27T10:00:01Z',
+  step_seconds: 300,
+  points: [
+    {
+      time: '2026-11-27T09:55:00Z',
+      count: 60,
+      temperature_c: { avg: 22.4, min: 22.1, max: 22.7 },
+      humidity_percent: { avg: 45, min: 44, max: 46 },
+      pressure_pa: { avg: 101325, min: 101300, max: 101350 },
+    },
+    {
+      time: '2026-11-27T09:50:00Z',
+      count: 58,
+      temperature_c: { avg: 22.3, min: 22, max: 22.6 },
+      humidity_percent: { avg: 45.5, min: 45, max: 46 },
+      pressure_pa: { avg: 101320, min: 101300, max: 101340 },
+    },
+  ],
+};
+
+describe('parseReadings', () => {
+  it('turns the answer into windows of milliseconds, oldest first', () => {
+    const readings = parseReadings(READINGS);
+    assert.equal(readings.from, Date.parse('2026-11-26T10:00:00Z'));
+    assert.equal(readings.to, Date.parse('2026-11-27T10:00:01Z'));
+    assert.equal(readings.stepMs, 300_000);
+    assert.deepEqual(readings.points.map((p) => p.t), [Date.parse('2026-11-27T09:50:00Z'), Date.parse('2026-11-27T09:55:00Z')]);
+    assert.deepEqual(readings.points[1], {
+      t: Date.parse('2026-11-27T09:55:00Z'),
+      count: 60,
+      temperature: { avg: 22.4, min: 22.1, max: 22.7 },
+      humidity: { avg: 45, min: 44, max: 46 },
+      pressure: { avg: 101325, min: 101300, max: 101350 },
+    });
+  });
+
+  it('accepts a range without readings', () => {
+    assert.deepEqual(parseReadings({ ...READINGS, points: [] }).points, []);
+  });
+
+  it('counts a window with an odd count as one reading', () => {
+    const body = { ...READINGS, points: [{ ...READINGS.points[0], count: undefined }, { ...READINGS.points[1], count: 0 }] };
+    assert.deepEqual(parseReadings(body).points.map((p) => p.count), [1, 1]);
+  });
+
+  it('refuses an answer that is not a series', () => {
+    const bad = [
+      null,
+      {},
+      'text',
+      { ...READINGS, points: null },
+      { ...READINGS, step_seconds: 0 },
+      { ...READINGS, step_seconds: '300' },
+      { ...READINGS, from: 'yesterday' },
+      { ...READINGS, to: undefined },
+      { ...READINGS, points: [{ ...READINGS.points[0], time: 'soon' }] },
+      { ...READINGS, points: [{ ...READINGS.points[0], temperature_c: { avg: 22, min: 21 } }] },
+      { ...READINGS, points: [{ ...READINGS.points[0], humidity_percent: null }] },
+      { ...READINGS, points: [{ ...READINGS.points[0], pressure_pa: { avg: NaN, min: 1, max: 2 } }] },
+      { ...READINGS, points: [null] },
+    ];
+    for (const body of bad) assert.throws(() => parseReadings(body), isApiError('server'), JSON.stringify(body)?.slice(0, 60));
+  });
+});
+
+describe('parseStats', () => {
+  const STATS = {
+    from: '2026-11-26T10:00:00Z',
+    to: '2026-11-27T10:00:01Z',
+    count: 17000,
+    temperature_c: { avg: 22.4, min: 21.8, max: 23.1 },
+    humidity_percent: { avg: 42, min: 36, max: 48 },
+    pressure_pa: { avg: 101325, min: 100900, max: 101700 },
+  };
+
+  it('gives the three measurements', () => {
+    assert.deepEqual(parseStats(STATS), {
+      count: 17000,
+      temperature: { avg: 22.4, min: 21.8, max: 23.1 },
+      humidity: { avg: 42, min: 36, max: 48 },
+      pressure: { avg: 101325, min: 100900, max: 101700 },
+    });
+  });
+
+  it('gives null for a range without readings', () => {
+    assert.equal(parseStats({ from: STATS.from, to: STATS.to, count: 0 }), null);
+  });
+
+  it('refuses what is not an aggregate', () => {
+    for (const bad of [null, {}, { count: -1 }, { count: 'many' }, { ...STATS, temperature_c: undefined }, { ...STATS, pressure_pa: { avg: 1 } }]) {
+      assert.throws(() => parseStats(bad), isApiError('server'), JSON.stringify(bad));
+    }
+  });
+});
+
+describe('getReadings', () => {
+  it('asks for the range, and for nothing else: the server chooses the step', async () => {
+    const fetch = serverSays(() => answer(READINGS));
+    await getReadings('7d');
+
+    const [path, init] = fetch.mock.calls[0].arguments;
+    assert.equal(path, '/api/v1/readings?range=7d');
+    assert.equal(init.cache, 'no-store');
+    assert.equal(init.credentials, 'same-origin');
+    assert.equal(init.headers.Accept, 'application/json');
+  });
+
+  it('escapes the range', async () => {
+    const fetch = serverSays(() => answer(READINGS));
+    await getReadings('7d&step=1s');
+    assert.equal(fetch.mock.calls[0].arguments[0], '/api/v1/readings?range=7d%26step%3D1s');
+  });
+
+  it('returns the series', async () => {
+    serverSays(() => answer(READINGS));
+    const readings = await getReadings('24h');
+    assert.equal(readings.points.length, 2);
+    assert.equal(readings.stepMs, 300_000);
+  });
+
+  it('says "limited" for 429, with the wait the server asked for', async () => {
+    serverSays(() => answer('', { status: 429, headers: { 'Retry-After': '20' } }));
+    await assert.rejects(getReadings('24h'), isApiError('limited', { retryAfterMs: 20_000, status: 429 }));
+  });
+
+  it('says "server" for a 404, for any other failure and for an answer that is not a series', async () => {
+    for (const status of [404, 400, 500, 503]) {
+      serverSays(() => answer('{}', { status }));
+      await assert.rejects(getReadings('24h'), isApiError('server'), String(status));
+      mock.restoreAll();
+    }
+    serverSays(() => answer({ nope: true }));
+    await assert.rejects(getReadings('24h'), isApiError('server'));
+  });
+
+  it('says "network" when the server cannot be reached', async () => {
+    mock.method(globalThis, 'fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    await assert.rejects(getReadings('24h'), isApiError('network'));
+  });
+
+  it('gives up when the caller does: the request is aborted, and it ends as "network"', async () => {
+    let seen;
+    mock.method(globalThis, 'fetch', (_path, { signal }) => {
+      seen = signal;
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))));
+    });
+    const controller = new AbortController();
+    const result = getReadings('24h', { signal: controller.signal });
+    controller.abort();
+
+    await assert.rejects(result, isApiError('network'));
+    assert.equal(seen.aborted, true);
+  });
+
+  it('does not even ask when the caller has already given up', async () => {
+    mock.method(globalThis, 'fetch', (_path, { signal }) =>
+      signal.aborted ? Promise.reject(new DOMException('Aborted', 'AbortError')) : Promise.resolve(answer(READINGS)),
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(getReadings('24h', { signal: controller.signal }), isApiError('network'));
+  });
+
+  it('stops listening to the signal of the caller when it is done, and stops its timer', async () => {
+    serverSays(() => answer(READINGS));
+    const controller = new AbortController();
+    const removed = mock.method(controller.signal, 'removeEventListener');
+    const cleared = mock.method(globalThis, 'clearTimeout');
+    await getReadings('24h', { signal: controller.signal });
+
+    assert.equal(removed.mock.calls.length, 1);
+    assert.equal(removed.mock.calls[0].arguments[0], 'abort');
+    assert.equal(cleared.mock.calls.length, 1);
+  });
+});
+
+describe('getStats', () => {
+  it('asks for the range', async () => {
+    const fetch = serverSays(() =>
+      answer({ count: 1, temperature_c: { avg: 1, min: 1, max: 1 }, humidity_percent: { avg: 1, min: 1, max: 1 }, pressure_pa: { avg: 1, min: 1, max: 1 } }),
+    );
+    const stats = await getStats('24h');
+    assert.equal(fetch.mock.calls[0].arguments[0], '/api/v1/stats?range=24h');
+    assert.equal(stats.count, 1);
+  });
+
+  it('escapes the range', async () => {
+    const fetch = serverSays(() => answer({ count: 0 }));
+    await getStats('24h&x=1');
+    assert.equal(fetch.mock.calls[0].arguments[0], '/api/v1/stats?range=24h%26x%3D1');
+  });
+
+  it('returns null for a range without readings', async () => {
+    serverSays(() => answer({ count: 0 }));
+    assert.equal(await getStats('24h'), null);
+  });
+
+  it('says "limited" for 429, and "server" for a 404', async () => {
+    serverSays(() => answer('', { status: 429 }));
+    await assert.rejects(getStats('24h'), isApiError('limited', { retryAfterMs: 30_000 }));
+    mock.restoreAll();
+    serverSays(() => answer('{}', { status: 404 }));
+    await assert.rejects(getStats('24h'), isApiError('server'));
   });
 });

@@ -4,11 +4,14 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_PRESSURE_UNIT,
   PRESSURE_UNITS,
+  createTimeFormat,
   formatAgo,
+  formatDecimal,
   formatDuration,
   formatHumidity,
   formatPressure,
   formatTemperature,
+  formatWhole,
   isPressureUnit,
 } from '../static/format.js';
 
@@ -114,5 +117,65 @@ describe('formatAgo', () => {
   it('says how long ago after that', () => {
     assert.equal(formatAgo(5), '5 s ago');
     assert.equal(formatAgo(90), '1 min ago');
+  });
+});
+
+describe('formatDecimal', () => {
+  it('writes one decimal, with a point, whatever the region of the phone', () => {
+    assert.equal(formatDecimal(22.44), '22.4');
+    assert.equal(formatDecimal(22.45), '22.5');
+    assert.equal(formatDecimal(1013), '1013.0');
+    assert.equal(formatDecimal(-3.26), '-3.3');
+    assert.equal(formatDecimal(12345.67), '12345.7');
+  });
+
+  it('does not write "-0.0"', () => {
+    assert.equal(formatDecimal(-0.04), '0.0');
+    assert.equal(formatDecimal(-0), '0.0');
+    assert.equal(formatDecimal(-0.06), '-0.1');
+  });
+
+  it('writes a dash for what is not a number', () => {
+    for (const bad of [NaN, Infinity, undefined, null, '22']) assert.equal(formatDecimal(bad), '–', String(bad));
+  });
+});
+
+describe('formatWhole', () => {
+  it('rounds to a whole number', () => {
+    assert.equal(formatWhole(41.5), '42');
+    assert.equal(formatWhole(41.4), '41');
+    assert.equal(formatWhole(0), '0');
+  });
+
+  it('writes a dash for what is not a number', () => {
+    for (const bad of [NaN, Infinity, undefined, null, '22']) assert.equal(formatWhole(bad), '–', String(bad));
+  });
+});
+
+describe('createTimeFormat', () => {
+  const t = Date.UTC(2026, 10, 27, 9, 5); // 14:05 in Astana, 04:05 in New York
+
+  it('writes the clock in 24 hours, in the time zone it is given', () => {
+    assert.equal(createTimeFormat('UTC').clock(t), '09:05');
+    assert.equal(createTimeFormat('Asia/Almaty').clock(t), '14:05');
+    assert.equal(createTimeFormat('America/New_York').clock(t), '04:05');
+  });
+
+  it('writes midnight as 00:00, not 24:00', () => {
+    assert.equal(createTimeFormat('UTC').clock(Date.UTC(2026, 10, 27, 0, 0)), '00:00');
+  });
+
+  it('writes the day with the month in letters: the same on every phone', () => {
+    assert.equal(createTimeFormat('UTC').day(t), 'Nov 27');
+    assert.equal(createTimeFormat('Asia/Almaty').day(Date.UTC(2026, 10, 27, 20, 0)), 'Nov 28');
+  });
+
+  it('writes a moment as the day and the clock, or only the day for a window that is a day long', () => {
+    const format = createTimeFormat('UTC');
+    assert.equal(format.moment(t), 'Nov 27, 09:05');
+    assert.equal(format.moment(t, 60_000), 'Nov 27, 09:05');
+    assert.equal(format.moment(t, 3 * 3_600_000), 'Nov 27, 09:05');
+    assert.equal(format.moment(t, 86_400_000), 'Nov 27');
+    assert.equal(format.moment(t, 2 * 86_400_000), 'Nov 27');
   });
 });

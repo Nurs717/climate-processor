@@ -24,7 +24,8 @@ const oneDecimal = new Intl.NumberFormat('en-US', {
 
 const NO_VALUE = '–';
 
-function decimal(value) {
+/** One decimal, in the same form on every phone; a dash for something that is not a number. */
+export function formatDecimal(value) {
   if (!Number.isFinite(value)) return NO_VALUE;
   // A tiny negative number would print as "-0.0".
   return oneDecimal.format(Math.abs(value) < 0.05 ? 0 : value);
@@ -32,12 +33,17 @@ function decimal(value) {
 
 /** @param {number} celsius */
 export function formatTemperature(celsius) {
-  return decimal(celsius);
+  return formatDecimal(celsius);
+}
+
+/** A whole number; a dash for something that is not a number. */
+export function formatWhole(value) {
+  return Number.isFinite(value) ? String(Math.round(value)) : NO_VALUE;
 }
 
 /** @param {number} percent relative humidity; a sensor cannot tell a tenth of a percent, so it is a whole number */
 export function formatHumidity(percent) {
-  return Number.isFinite(percent) ? String(Math.round(percent)) : NO_VALUE;
+  return formatWhole(percent);
 }
 
 /**
@@ -46,7 +52,7 @@ export function formatHumidity(percent) {
  */
 export function formatPressure(pascals, unit) {
   if (!isPressureUnit(unit)) throw new RangeError(`unknown pressure unit ${JSON.stringify(unit)}`);
-  return decimal(PRESSURE_UNITS[unit].fromPascals(pascals));
+  return formatDecimal(PRESSURE_UNITS[unit].fromPascals(pascals));
 }
 
 /** A length of time in its two largest units that matter: 45 s, 8 min, 2 h 5 min, 3 d. */
@@ -69,3 +75,24 @@ export function formatDuration(totalSeconds) {
 export function formatAgo(seconds) {
   return seconds < 5 ? 'just now' : `${formatDuration(seconds)} ago`;
 }
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Formats of moments for people, in a time zone (the local one when none is given).
+ * The interface is English only, but the clock is the 24-hour one that people here read.
+ */
+export function createTimeFormat(timeZone) {
+  const clock = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone });
+  const day = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone });
+  return {
+    /** "14:35" */
+    clock: (ms) => clock.format(ms),
+    /** "Nov 27" */
+    day: (ms) => day.format(ms),
+    /** "Nov 27, 14:35", or just "Nov 27" for a window that is a day long or more */
+    moment: (ms, stepMs = 0) => (stepMs >= DAY_MS ? day.format(ms) : `${day.format(ms)}, ${clock.format(ms)}`),
+  };
+}
+
+export const timeFormat = createTimeFormat();

@@ -112,7 +112,8 @@ function describeWithoutReading(error, state, now) {
   }
 }
 
-function limitedMessage(state, now) {
+/** The sentence for a 429: how long is left of the wait the server asked for. */
+export function limitedMessage(state, now) {
   const wait = Math.ceil((state.retryAt - now) / 1000);
   return wait > 0
     ? `Too many requests. Trying again in ${formatDuration(wait)}.`
