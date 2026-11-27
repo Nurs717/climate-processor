@@ -30,6 +30,7 @@ import {
 } from './history.js';
 import { createLoop } from './loop.js';
 import { describe, initialState, nextDelay, onFailure, onLatest } from './model.js';
+import { startShell } from './pwa.js';
 import { createView } from './view.js';
 
 const UNIT_KEY = 'climate.pressureUnit';
@@ -156,6 +157,17 @@ const accountLoop = createLoop(
 
 const loops = [latestLoop, historyLoop, statsLoop, accountLoop];
 
+// The files of the app are kept on the device by the service worker, which is how an installed app opens without a
+// network and how a new build reaches it.
+const shell = startShell(navigator.serviceWorker, {
+  now: () => performance.now(),
+  reload: () => location.reload(),
+  whenLoaded: (run) => {
+    if (document.readyState === 'complete') run();
+    else window.addEventListener('load', run, { once: true });
+  },
+});
+
 view.onUnitPicked((picked) => {
   if (!isPressureUnit(picked) || picked === unit) return;
   unit = picked;
@@ -201,9 +213,16 @@ document.addEventListener('visibilitychange', () => {
     for (const loop of loops) loop.pause();
     return;
   }
+  shell.comeBack();
   renderBoard();
   renderHistory();
   for (const loop of loops) loop.resume();
+});
+
+// The connection is back (a phone coming out of a tunnel): ask at once, instead of waiting out the pause that followed
+// the failures.
+window.addEventListener('online', () => {
+  if (visible()) for (const loop of loops) loop.start();
 });
 
 // The age of the reading grows by the second, so the sentences about it are refreshed by the second.

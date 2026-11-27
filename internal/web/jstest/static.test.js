@@ -47,6 +47,7 @@ describe('index.html', () => {
   it('preloads every script of the app', () => {
     for (const name of scripts) {
       if (name === 'app.js') continue; // it has its own <script> tag
+      if (name === 'sw.js') continue; // not a module of the page: the browser loads the worker itself
       assert.ok(html.includes(`<link rel="modulepreload" href="/${name}">`), `${name} is not preloaded`);
     }
   });
@@ -65,4 +66,43 @@ describe('the scripts of the app', () => {
       }
     });
   }
+});
+
+describe('the app as an installed program', () => {
+  const html = readFileSync(new URL('index.html', staticDir), 'utf8');
+  const css = readFileSync(new URL('app.css', staticDir), 'utf8');
+  const manifest = JSON.parse(readFileSync(new URL('manifest.webmanifest', staticDir), 'utf8'));
+
+  // The colour of the page behind everything: the token --bg of the light theme and of the dark one.
+  const background = (selector) => css.match(new RegExp(`^${selector}\\s*\\{[^}]*?--bg:\\s*(#[0-9a-f]{6})`, 'im'))?.[1];
+
+  it('links its manifest', () => {
+    assert.match(html, /<link rel="manifest" href="\/manifest\.webmanifest">/);
+  });
+
+  it('gives the bar of the browser the colour of the page, in both themes', () => {
+    const light = background(':root');
+    const dark = background(':root\\[data-theme="dark"\\]');
+    assert.match(light ?? '', /^#/, 'no --bg in the light theme of app.css');
+    assert.match(dark ?? '', /^#/, 'no --bg in the dark theme of app.css');
+    const bars = [...html.matchAll(/<meta name="theme-color" content="(#[0-9a-f]{6})" media="\(prefers-color-scheme: (light|dark)\)">/g)];
+    assert.deepEqual(
+      Object.fromEntries(bars.map((match) => [match[2], match[1]])),
+      { light, dark },
+    );
+  });
+
+  it('opens on the colour of the page (the manifest cannot tell the themes apart: it is the light one)', () => {
+    assert.equal(manifest.background_color, background(':root'));
+    assert.equal(manifest.theme_color, background(':root'));
+  });
+
+  it('starts the worker from app.js, through pwa.js', () => {
+    const app = readFileSync(new URL('app.js', staticDir), 'utf8');
+    assert.match(app, /from '\.\/pwa\.js'/);
+    assert.match(app, /\bstartShell\(/);
+    assert.match(app, /\bshell\.comeBack\(\)/, 'the page does not tell the worker that it is back in front');
+    assert.match(app, /addEventListener\('online'/, 'the page does not ask again when the connection is back');
+    assert.match(readFileSync(new URL('pwa.js', staticDir), 'utf8'), /\.register\('\/sw\.js'\)/);
+  });
 });
