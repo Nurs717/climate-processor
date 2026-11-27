@@ -3,8 +3,11 @@ package rest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -408,19 +411,16 @@ func TestLoginCookieIsSecureWhenAsked(t *testing.T) {
 	}
 }
 
-func TestLoginFailureIsReportedWithoutACookie(t *testing.T) {
+func TestLoginFailureSendsTheBrowserBackWithTheReasonAndWithoutACookie(t *testing.T) {
 	e := newAuthEnv(t)
 	e.signIn.beginErr = apperr.New(apperr.CodeTooManyRequests, "fake", "too many sign-ins in progress, try again later")
 
 	rec := e.get("/api/v1/auth/telegram/login")
 
-	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_requests" {
-		t.Errorf("status = %d, want 429", rec.Code)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/?signin=busy" {
+		t.Errorf("status %d, Location %q; want 302 to /?signin=busy", rec.Code, rec.Header().Get("Location"))
 	}
 	wantNoCookie(t, rec, flowCookie)
-	if rec.Header().Get("Location") != "" {
-		t.Error("a failed sign-in must not redirect")
-	}
 }
 
 // callback sends the browser back from Telegram: the flow cookie and the query that Telegram adds.
@@ -488,8 +488,8 @@ func TestCallbackWithoutTheFlowCookieAsksFinishWithAnEmptyBrowserState(t *testin
 
 	rec := e.callback("code=c&state=s")
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rec.Code)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/?signin=expired" {
+		t.Errorf("status %d, Location %q; want 302 to /?signin=expired", rec.Code, rec.Header().Get("Location"))
 	}
 	if len(e.signIn.finishes) != 1 || e.signIn.finishes[0].browserState != "" {
 		t.Errorf("Finish got %+v, want an empty browser state", e.signIn.finishes)
@@ -501,44 +501,44 @@ func TestCallbackFailures(t *testing.T) {
 		name       string
 		setup      func(*authEnv)
 		query      string
-		wantStatus int
-		wantCode   string
-		wantFinish int // how many times Finish must be called
+		wantReason string // after /?signin=
+		wantFinish int    // how many times Finish must be called
+		wantLoud   bool   // a failure of ours: it is also logged at ERROR
 	}{
 		{
 			name: "Telegram does not accept the sign-in",
 			setup: func(e *authEnv) {
 				e.signIn.finishErr = apperr.New(apperr.CodeUnauthorized, "fake", "Telegram sign-in failed")
 			},
-			query: "code=c&state=s", wantStatus: 401, wantCode: "unauthorized", wantFinish: 1,
+			query: "code=c&state=s", wantReason: "failed", wantFinish: 1,
 		},
 		{
 			name:  "the state is unknown or used",
 			setup: func(e *authEnv) { e.signIn.finishErr = apperr.New(apperr.CodeBadRequest, "fake", "expired") },
-			query: "code=c&state=s", wantStatus: 400, wantCode: "bad_request", wantFinish: 1,
+			query: "code=c&state=s", wantReason: "expired", wantFinish: 1,
 		},
 		{
 			name: "the account is not an owner",
 			setup: func(e *authEnv) {
 				e.sessions.createErr = apperr.New(apperr.CodeForbidden, "fake", "this account is not the owner")
 			},
-			query: "code=c&state=s", wantStatus: 403, wantCode: "forbidden", wantFinish: 1,
+			query: "code=c&state=s", wantReason: "not_owner", wantFinish: 1,
 		},
 		{
 			name: "the session cannot be stored",
 			setup: func(e *authEnv) {
 				e.sessions.createErr = apperr.New(apperr.CodeUnavailable, "fake", "sign-in is temporarily unavailable")
 			},
-			query: "code=c&state=s", wantStatus: 503, wantCode: "unavailable", wantFinish: 1,
+			query: "code=c&state=s", wantReason: "unavailable", wantFinish: 1, wantLoud: true,
 		},
 		{
 			name:  "an unexpected failure",
 			setup: func(e *authEnv) { e.signIn.finishErr = errors.New("disk on fire") },
-			query: "code=c&state=s", wantStatus: 500, wantCode: "unknown", wantFinish: 1,
+			query: "code=c&state=s", wantReason: "failed", wantFinish: 1, wantLoud: true,
 		},
 		{
 			name:  "the user pressed Cancel in Telegram",
-			query: "error=access_denied&error_description=The+user+denied+access&state=s", wantStatus: 401, wantCode: "unauthorized", wantFinish: 0,
+			query: "error=access_denied&error_description=The+user+denied+access&state=s", wantReason: "cancelled", wantFinish: 0,
 		},
 	}
 	for _, tt := range tests {
@@ -550,21 +550,81 @@ func TestCallbackFailures(t *testing.T) {
 
 			rec := e.callback(tt.query, withCookie(flowCookie, "s"))
 
-			if rec.Code != tt.wantStatus || errorCode(t, rec) != tt.wantCode {
-				t.Errorf("status = %d (%s), want %d %s", rec.Code, rec.Body, tt.wantStatus, tt.wantCode)
+			// The browser is sent home, not left on a page of JSON: the home page says what happened.
+			if want := "/?signin=" + tt.wantReason; rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+				t.Errorf("status %d, Location %q (%s); want 302 to %s", rec.Code, rec.Header().Get("Location"), rec.Body, want)
 			}
 			wantNoCookie(t, rec, sessionCookie)
 			wantRemoved(t, rec, flowCookie, "/api/v1/auth/telegram") // a sign-in is never retried with the same state
 			if len(e.signIn.finishes) != tt.wantFinish {
 				t.Errorf("Finish was called %d times, want %d", len(e.signIn.finishes), tt.wantFinish)
 			}
-			if rec.Header().Get("Location") != "" {
-				t.Error("a failed sign-in must not redirect")
-			}
 			if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
 				t.Errorf("Referrer-Policy = %q: it must be set on errors too", got)
 			}
+			if r := e.record(t, "request done"); r["error"] == nil || r["status"] != float64(http.StatusFound) {
+				t.Errorf("the access log must keep the cause of a failed sign-in; record = %v", r)
+			}
+			loud := false
+			for _, r := range e.records(t) {
+				if r["message"] == "sign-in failed" {
+					loud = true
+					if r["level"] != "ERROR" || r["reason"] != tt.wantReason || r["request_id"] == nil {
+						t.Errorf("record = %v, want ERROR with the reason and the request id", r)
+					}
+				}
+			}
+			if loud != tt.wantLoud {
+				t.Errorf("logged at ERROR = %v, want %v: only a failure of ours is an error", loud, tt.wantLoud)
+			}
 		})
+	}
+}
+
+func TestCallbackOfABrowserThatLeftIsNotRedirected(t *testing.T) {
+	e := newAuthEnv(t)
+	e.signIn.finishErr = fmt.Errorf("telegram: %w", context.Canceled)
+
+	rec := e.callback("code=c&state=s", withCookie(flowCookie, "s"))
+
+	if rec.Code != 499 || rec.Header().Get("Location") != "" {
+		t.Errorf("status %d, Location %q; want 499 and no redirect: nobody is there to follow it", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestReasonFor(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{apperr.New(apperr.CodeForbidden, "x", "no"), "not_owner"},
+		{apperr.New(apperr.CodeBadRequest, "x", "no"), "expired"},
+		{apperr.New(apperr.CodeTooManyRequests, "x", "no"), "busy"},
+		{apperr.New(apperr.CodeUnavailable, "x", "no"), "unavailable"},
+		{apperr.New(apperr.CodeUnauthorized, "x", "no"), "failed"},
+		{apperr.New(apperr.CodeUnknown, "x", "no"), "failed"},
+		{apperr.New(apperr.CodeNotFound, "x", "no"), "failed"},
+		{errors.New("not an application error"), "failed"},
+		{fmt.Errorf("wrapped: %w", apperr.New(apperr.CodeForbidden, "x", "no")), "not_owner"},
+	}
+	for _, tt := range tests {
+		if got := reasonFor(tt.err); got != tt.want {
+			t.Errorf("reasonFor(%v) = %q, want %q", tt.err, got, tt.want)
+		}
+	}
+}
+
+// The web app shows a sentence for the reason it finds in the address, and nothing for a reason it does not know:
+// a reason that is missing there would send the person home without a word.
+func TestTheWebAppHasASentenceForEveryReason(t *testing.T) {
+	source, err := os.ReadFile("../../web/static/account.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range []string{reasonCancelled, reasonNotOwner, reasonExpired, reasonBusy, reasonUnavailable, reasonFailed} {
+		if !regexp.MustCompile(`\b` + reason + `\s*:`).Match(source) {
+			t.Errorf("static/account.js has no sentence for the reason %q", reason)
+		}
 	}
 }
 
@@ -587,8 +647,11 @@ func TestCallbackDoesNotEchoWhatTelegramSent(t *testing.T) {
 
 	rec := e.callback("error=<script>"+long+"</script>", withCookie(flowCookie, "s"))
 
-	if strings.Contains(rec.Body.String(), "script") {
-		t.Errorf("the response repeats the text of the address: %s", rec.Body)
+	if strings.Contains(rec.Body.String(), "script") || strings.Contains(rec.Header().Get("Location"), "script") {
+		t.Errorf("the response repeats the text of the address: %s (Location %q)", rec.Body, rec.Header().Get("Location"))
+	}
+	if got := rec.Header().Get("Location"); got != "/?signin=cancelled" {
+		t.Errorf("Location = %q, want /?signin=cancelled whatever Telegram sent", got)
 	}
 	if r := e.record(t, "request done"); len(r["error"].(string)) > 300 {
 		t.Errorf("the log line must keep an attacker's text short: %d characters", len(r["error"].(string)))
