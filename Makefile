@@ -13,13 +13,18 @@ CLOUD_COMPOSE := docker compose -f deploy/local/docker-compose.cloud.yml
 GOLANGCI_LINT_VERSION ?= v2.15.0
 
 .DEFAULT_GOAL := help
-.PHONY: help test lint vuln build run up down logs ps send metrics tunnel tunnel-keep cloud-up cloud-down
+.PHONY: help test test-js lint vuln build run up down logs ps send metrics tunnel tunnel-keep cloud-up cloud-down
 
 help: ## Show this list
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-test: ## Run unit tests with the race detector
+test: ## Run unit tests with the race detector (and the JavaScript tests, when Node is installed)
 	go test -race -cover ./...
+	@if command -v node >/dev/null 2>&1; then $(MAKE) --no-print-directory test-js; else echo "Node not found: skipped the JavaScript tests (make test-js)"; fi
+
+test-js: ## Check and test the JavaScript of the web app (Node 20 or newer, nothing to install)
+	@for f in internal/web/static/*.js; do node --check $$f || exit 1; done
+	node --test internal/web/jstest/*.test.js
 
 lint: ## Check formatting, run go vet and golangci-lint (same version as CI)
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed for:"; gofmt -l .; exit 1)

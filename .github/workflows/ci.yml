@@ -40,6 +40,13 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race -cover ./...
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Check and test the JavaScript of the web app
+        run: |
+          for f in internal/web/static/*.js; do node --check "$f"; done
+          node --test internal/web/jstest/*.test.js
 
   lint:
     name: Lint
