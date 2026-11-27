@@ -1,6 +1,6 @@
 # Running on Google Cloud (e2-micro, Always Free)
 
-Layout: ESP32 → `mqtts://<IP>:8883` (Mosquitto, TLS + username/password) → Go service → Telegram bot and REST API (behind Caddy, HTTPS).
+Layout: ESP32 → `mqtts://<IP>:8883` (Mosquitto, TLS + username/password) → Go service → Telegram bot, REST API and web app (behind Caddy, HTTPS).
 One small VM runs the broker, the service and Caddy. Prometheus/Grafana are not deployed (1 GB RAM); metrics are available on `127.0.0.1:2112` of the VM itself.
 
 > This page is about the cloud deployment. To run everything locally with one command (no cloud needed), see the [Quick start in the root README](../../README.md#quick-start-local-one-command).
@@ -266,10 +266,10 @@ Check:
 curl -s https://<SITE_ADDRESS>/api/v1/auth/me      # {"role":"demo","sign_in_enabled":true}
 ```
 
-Then open `https://<SITE_ADDRESS>/api/v1/auth/telegram/login` in a browser and confirm in Telegram. You land on `/`, which is a JSON 404 until the
-web app exists; that is expected. Open `/api/v1/auth/me`: it must now say `"role":"owner"`.
-An account that is not an admin gets `403`, and the service logs a warning with its Telegram id.
-To sign out, send `POST /api/v1/auth/logout` (for example `fetch('/api/v1/auth/logout', {method: 'POST'})` in the browser console).
+Then open `https://<SITE_ADDRESS>/` in a browser, press **Owner sign-in** and confirm in Telegram. You land back on the dashboard, and its header
+says "Signed in" with a **Sign out** button. `/api/v1/auth/me` must now say `"role":"owner"`.
+An account that is not an admin is sent back to the dashboard with a message that it is not the owner's, and the service logs a warning with its Telegram id.
+To sign out, press **Sign out** (or send `POST /api/v1/auth/logout`).
 
 ## Check without hardware
 
