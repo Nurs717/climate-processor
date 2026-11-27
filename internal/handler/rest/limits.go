@@ -3,6 +3,7 @@ package rest
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"climate-processor/internal/auth"
@@ -51,6 +52,33 @@ func (l limits) settle(cost int) gin.HandlerFunc {
 			// A role without a limit of its own gets the strictest one.
 			charge(c, l.demo, l.now(), c.ClientIP(), cost)
 		}
+	}
+}
+
+// page serves the files of the web app to the requests that no route of the API has taken. Opening the page takes a
+// handful of files, so they have a budget of their own, per IP address: it must not eat the one of the API. Anything
+// that is not a file of the app falls through to the handlers after this one, which answer 404.
+func (l limits) page(ui UI) gin.HandlerFunc {
+	if ui == nil {
+		return func(*gin.Context) {}
+	}
+	return func(c *gin.Context) {
+		r := c.Request
+		if (r.Method != http.MethodGet && r.Method != http.MethodHead) ||
+			strings.HasPrefix(r.URL.Path, "/api/") || // an API error stays JSON, whatever the app holds
+			!ui.Has(r.URL.Path) {
+			return
+		}
+		if l.demo != nil {
+			charge(c, l.demo, l.now(), "static:"+c.ClientIP(), 1)
+		}
+		if !c.IsAborted() {
+			// Gin starts the answer to an unknown route as a 404, and keeps that status for a handler that writes a
+			// body, or nothing (HEAD), without setting one. The app may still choose another status.
+			c.Status(http.StatusOK)
+			ui.ServeHTTP(c.Writer, r)
+		}
+		c.Abort()
 	}
 }
 

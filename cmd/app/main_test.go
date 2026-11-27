@@ -89,6 +89,55 @@ func TestNewAPIServerErrors(t *testing.T) {
 	}
 }
 
+func TestNewAPIServerServesTheWebAppNextToTheAPI(t *testing.T) {
+	cfg := &config.Config{HTTPAddr: ":8080", APIRatePerMin: 60, APIRateBurst: 2}
+	srv, err := newAPIServer(quiet(), cfg, fakeReader{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page := apiRequest(srv.Handler, http.MethodGet, "/")
+	api := apiRequest(srv.Handler, http.MethodGet, "/api/v1/latest")
+	missing := apiRequest(srv.Handler, http.MethodGet, "/no-such-file.js")
+
+	if page.Code != http.StatusOK || !strings.HasPrefix(page.Header().Get("Content-Type"), "text/html") {
+		t.Errorf("/: status %d, type %q; want the page", page.Code, page.Header().Get("Content-Type"))
+	}
+	if csp := page.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") {
+		t.Errorf("/: Content-Security-Policy = %q", csp)
+	}
+	if got := page.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("/: Cache-Control = %q, want no-cache (revalidate, keep the ETag)", got)
+	}
+	if api.Code != http.StatusOK || !strings.HasPrefix(api.Header().Get("Content-Type"), "application/json") {
+		t.Errorf("/api/v1/latest: status %d, type %q; want JSON", api.Code, api.Header().Get("Content-Type"))
+	}
+	if got := api.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("/api/v1/latest: Cache-Control = %q, want no-store", got)
+	}
+	if missing.Code != http.StatusNotFound || !strings.HasPrefix(missing.Header().Get("Content-Type"), "application/json") {
+		t.Errorf("a missing file: status %d, type %q; want the JSON 404", missing.Code, missing.Header().Get("Content-Type"))
+	}
+}
+
+func TestNewAPIServerGivesThePageABudgetApartFromTheAPI(t *testing.T) {
+	cfg := &config.Config{HTTPAddr: ":8080", APIRatePerMin: 60, APIRateBurst: 2}
+	srv, err := newAPIServer(quiet(), cfg, fakeReader{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, want := range []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests} {
+		if got := apiRequest(srv.Handler, http.MethodGet, "/app.css").Code; got != want {
+			t.Errorf("file request %d: %d, want %d", i+1, got, want)
+		}
+	}
+
+	if got := call(srv.Handler, "192.0.2.1:1", ""); got != http.StatusOK {
+		t.Errorf("the API after the files used up their budget: %d, want 200", got)
+	}
+}
+
 // noSessions is a session store that keeps nothing: the tests below never get further than the redirect to Telegram.
 type noSessions struct{}
 

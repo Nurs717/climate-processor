@@ -25,6 +25,7 @@ import (
 	"climate-processor/internal/ratelimit"
 	"climate-processor/internal/repository/sqlite"
 	"climate-processor/internal/service"
+	"climate-processor/internal/web"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -238,10 +239,15 @@ func newOwnerAuth(ctx context.Context, log *slog.Logger, cfg *config.Config, ses
 	}, nil
 }
 
-// newAPIServer builds the public REST API server: its trusted proxies (to find the real client address), the
-// per-client rate limit, the higher limit of the owner and the owner sign-in (nil = off) come from the configuration.
+// newAPIServer builds the public HTTP server: the REST API and the web app. Its trusted proxies (to find the real
+// client address), the per-client rate limit, the higher limit of the owner and the owner sign-in (nil = off) come
+// from the configuration.
 func newAPIServer(log *slog.Logger, cfg *config.Config, reader rest.Reader, owner *ownerAuth) (*http.Server, error) {
-	opts := rest.Options{TrustedProxies: cfg.TrustedProxies}
+	app, err := web.New()
+	if err != nil {
+		return nil, fmt.Errorf("web app: %w", err)
+	}
+	opts := rest.Options{TrustedProxies: cfg.TrustedProxies, UI: app}
 	var ownerRate, ownerBurst int // what the owner is limited to; 0 = the same as everybody
 	if cfg.APIRatePerMin > 0 {
 		limiter, err := ratelimit.New(cfg.APIRatePerMin, cfg.APIRateBurst, maxTrackedClients)

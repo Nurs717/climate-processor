@@ -1,4 +1,4 @@
-// Package rest serves the JSON API of the climate service (gin).
+// Package rest serves the JSON API of the climate service (gin) and, around it, the files of the web app.
 package rest
 
 import (
@@ -15,6 +15,7 @@ import (
 	"climate-processor/internal/domain"
 	"climate-processor/internal/ratelimit"
 	"climate-processor/internal/service"
+	"climate-processor/internal/web"
 
 	"github.com/gin-gonic/gin"
 )
@@ -50,12 +51,19 @@ type SignIn interface {
 	FlowTTL() time.Duration
 }
 
+// UI serves the files of the web app. Has tells whether a URL path is one of them.
+type UI interface {
+	Has(path string) bool
+	http.Handler
+}
+
 // The implementations must satisfy the interfaces; checked at compile time.
 var (
 	_ Reader   = (*service.ClimateService)(nil)
 	_ Limiter  = (*ratelimit.Limiter)(nil)
 	_ Sessions = (*auth.Service)(nil)
 	_ SignIn   = (*telegram.Login)(nil)
+	_ UI       = (*web.App)(nil)
 )
 
 // Options are the optional settings of the router.
@@ -67,6 +75,9 @@ type Options struct {
 	// takes one token per request of an IP address that sends a session token, which keeps a flood of made-up
 	// tokens away from the session store. It needs Sessions. nil = the owner has the same limit as everybody.
 	OwnerLimiter Limiter
+	// UI serves the web app: its files answer the GET and HEAD requests that no API route takes. Every client has
+	// a budget for them (in Limiter) that is separate from the one of the API. nil = there is no web app.
+	UI UI
 	// TrustedProxies are the IPs or CIDR ranges of the reverse proxies in front of the service. Their
 	// X-Forwarded-For header is believed (that is how the real client address is found); from any other
 	// peer it is ignored. Empty = no proxy is trusted, the client is the peer.
@@ -122,7 +133,7 @@ func NewRouter(log *slog.Logger, reader Reader, opts Options) (http.Handler, err
 	r.Use(requestID(), accessLog(log), recovery(log))
 	limit := func(cost int) gin.HandlerFunc { return rateLimit(opts.Limiter, opts.Now, cost) }
 	lim := limits{demo: opts.Limiter, owner: opts.OwnerLimiter, now: opts.Now}
-	r.NoRoute(limit(costCheap), wrap(func(*gin.Context) error {
+	r.NoRoute(lim.page(opts.UI), limit(costCheap), wrap(func(*gin.Context) error {
 		return apperr.New(apperr.CodeNotFound, "rest.NoRoute", "not found")
 	}))
 
