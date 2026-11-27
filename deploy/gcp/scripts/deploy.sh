@@ -36,7 +36,9 @@ mv .env.new .env
 
 docker compose pull climate-app
 docker compose up -d --remove-orphans
-docker image prune -f >/dev/null
+# Remove every image that no container uses, which includes the previous version of climate-app: each deploy
+# leaves one tagged image behind, and plain -f removes only untagged ones. A rollback pulls the old image again.
+docker image prune -af >/dev/null
 
 # Fail the deployment (and the pipeline) if the new version does not become healthy.
 container="$(docker compose ps -q climate-app)"
