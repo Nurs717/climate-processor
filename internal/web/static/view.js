@@ -1,6 +1,7 @@
 // The page: it only writes what describe() says and reads nothing back. Text goes in with textContent, never as HTML.
 
 import { PRESSURE_UNITS, formatHumidity, formatPressure, formatTemperature } from './format.js';
+import { METRICS, describeDayRange } from './history.js';
 
 const NO_VALUE = '–';
 
@@ -23,6 +24,7 @@ export function createView(doc) {
     statusText: byId('status-text'),
     role: byId('role'),
   };
+  const dayRanges = Object.fromEntries(METRICS.map((metric) => [metric.key, byId(`${metric.key}-range`)]));
   const unitButtons = [...doc.querySelectorAll('.unit-button')];
 
   // What was written last, so that the once-a-second refresh touches the page only when something changed.
@@ -64,6 +66,20 @@ export function createView(doc) {
       // The temperature in the tab, so that the dashboard can be read without switching to it.
       const title = values ? `${formatTemperature(values.temperature)} °C – Climate` : 'Climate';
       if (doc.title !== title) doc.title = title;
+    },
+
+    /**
+     * The "24 h range 21.8–23.1" under every number.
+     * @param {{temperature: object, humidity: object, pressure: object}|null} stats the aggregate of the last 24 hours
+     * @param {string} unit the key of the pressure unit
+     */
+    renderDayRange(stats, unit) {
+      for (const metric of METRICS) {
+        const element = dayRanges[metric.key];
+        const text = stats ? describeDayRange(stats[metric.key], metric, unit) : '';
+        setText(element, text);
+        if (element.hidden !== (text === '')) element.hidden = text === '';
+      }
     },
 
     /** @param {{role: string}} me the answer of /api/v1/auth/me */

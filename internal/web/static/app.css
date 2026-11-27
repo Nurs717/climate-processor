@@ -304,7 +304,8 @@ ul {
   border-left: 1px solid var(--hair);
 }
 
-.units {
+.units,
+.ranges {
   display: inline-flex;
   margin-top: 0.9rem;
   border: 1px solid var(--hair);
@@ -312,7 +313,8 @@ ul {
   overflow: hidden;
 }
 
-.unit-button {
+.unit-button,
+.range-button {
   min-height: 2.75rem;
   padding: 0 0.9rem;
   border: 0;
@@ -324,18 +326,213 @@ ul {
   cursor: pointer;
 }
 
-.unit-button + .unit-button {
+.unit-button + .unit-button,
+.range-button + .range-button {
   border-left: 1px solid var(--hair);
 }
 
-.unit-button[aria-pressed="true"] {
+.unit-button[aria-pressed="true"],
+.range-button[aria-pressed="true"] {
   background: var(--ink);
   color: var(--bg);
   cursor: default;
 }
 
-.unit-button:focus-visible {
+.unit-button:focus-visible,
+.range-button:focus-visible {
   outline-offset: -2px;
+}
+
+/* History: the range, then one chart for every measurement, all on the same time axis */
+
+.content {
+  flex: 1;
+}
+
+.subline {
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.hero .subline {
+  margin-top: 0.4rem;
+}
+
+.history {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--hair);
+}
+
+.history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.section-title {
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.ranges {
+  margin-top: 0;
+}
+
+.history-status {
+  margin-top: 1rem;
+  font-size: 0.9375rem;
+}
+
+.charts {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+}
+
+.charts[data-dimmed="true"] .plot {
+  opacity: 0.5;
+}
+
+.chart {
+  min-width: 0;
+  margin: 0;
+}
+
+.chart[data-metric="temperature"] {
+  --series: var(--series-temperature);
+}
+
+.chart[data-metric="humidity"] {
+  --series: var(--series-humidity);
+}
+
+.chart[data-metric="pressure"] {
+  --series: var(--series-pressure);
+}
+
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.15rem 1rem;
+}
+
+.readout {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums; /* the sentence changes while a finger moves: the digits must not jump */
+}
+
+.plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 0.4rem;
+  cursor: crosshair;
+  touch-action: pan-y; /* a finger scrubs along the chart, and still scrolls the page up and down */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.plot .grid-line {
+  stroke: var(--hair);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.plot .band {
+  fill: var(--series);
+  opacity: 0.2;
+}
+
+.plot .line {
+  fill: none;
+  stroke: var(--series);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plot .dot {
+  fill: var(--series);
+}
+
+.plot .tick-label {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke; /* a halo in the colour of the page keeps the labels readable over the lines */
+  stroke: var(--bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.plot .cursor[data-active="false"] {
+  display: none;
+}
+
+.plot .cursor-line {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.plot .cursor-dot {
+  fill: var(--series);
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+
+.table-view {
+  margin-top: 1.5rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.table-view summary {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  cursor: pointer;
+}
+
+.table-holder {
+  max-height: 24rem;
+  overflow: auto;
+  border-top: 1px solid var(--hair);
+}
+
+.table-holder table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-holder caption {
+  padding: 0.75rem 0;
+  text-align: left;
+}
+
+.table-holder th,
+.table-holder td {
+  padding: 0.4rem 1rem 0.4rem 0;
+  border-bottom: 1px solid var(--hair);
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table-holder tr:first-child th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-weight: 500;
 }
 
 /* Footer */
@@ -365,7 +562,8 @@ ul {
 
 /* The narrowest phones: the two unit buttons must still fit into half of the screen. */
 @media (max-width: 22.5rem) {
-  .unit-button {
+  .unit-button,
+  .range-button {
     padding: 0 0.6rem;
   }
 }

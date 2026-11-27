@@ -39,9 +39,13 @@ class FakeElement {
 }
 
 function fakePage() {
-  const ids = ['board', 'temperature', 'humidity', 'pressure', 'pressure-unit', 'status', 'status-text', 'role'];
+  const ids = [
+    'board', 'temperature', 'humidity', 'pressure', 'pressure-unit', 'status', 'status-text', 'role',
+    'temperature-range', 'humidity-range', 'pressure-range',
+  ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
-  elements.role.hidden = true; // as in index.html: the role is shown once it is known
+  // As in index.html: the role is shown once it is known, and so are the ranges of the last day.
+  for (const id of ['role', 'temperature-range', 'humidity-range', 'pressure-range']) elements[id].hidden = true;
   const buttons = [new FakeElement({ unit: 'mmhg' }), new FakeElement({ unit: 'hpa' })];
   const doc = {
     titleWrites: 0,
@@ -167,6 +171,55 @@ describe('render', () => {
     createView(doc).render({ ...live, message: '<img src=x onerror=alert(1)>' }, 'mmhg');
     // The stand-in only has textContent. A view that used innerHTML would leave this empty.
     assert.equal(el['status-text'].text, '<img src=x onerror=alert(1)>');
+  });
+});
+
+describe('renderDayRange', () => {
+  // What /stats?range=24h gives, in the units of the server (pascals).
+  const day = {
+    count: 17280,
+    temperature: { avg: 22.4, min: 21.84, max: 23.06 },
+    humidity: { avg: 42, min: 36.2, max: 48.4 },
+    pressure: { avg: 101325, min: 100900, max: 101700 },
+  };
+
+  it('is not there before the numbers arrive', () => {
+    const { el } = fakePage();
+    assert.deepEqual([el['temperature-range'].hidden, el['humidity-range'].hidden, el['pressure-range'].hidden], [true, true, true]);
+  });
+
+  it('writes the lowest and the highest value of the day under every number, in the unit asked for', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderDayRange(day, 'hpa');
+
+    assert.equal(el['temperature-range'].text, '24 h range 21.8–23.1');
+    assert.equal(el['humidity-range'].text, '24 h range 36–48');
+    assert.equal(el['pressure-range'].text, '24 h range 1009.0–1017.0');
+    assert.deepEqual([el['temperature-range'].hidden, el['humidity-range'].hidden, el['pressure-range'].hidden], [false, false, false]);
+
+    view.renderDayRange(day, 'mmhg');
+    assert.equal(el['pressure-range'].text, '24 h range 756.8–762.8');
+  });
+
+  it('hides the lines again when there are no numbers (a day without readings)', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderDayRange(day, 'mmhg');
+    view.renderDayRange(null, 'mmhg');
+
+    assert.deepEqual([el['temperature-range'].text, el['humidity-range'].text, el['pressure-range'].text], ['', '', '']);
+    assert.deepEqual([el['temperature-range'].hidden, el['humidity-range'].hidden, el['pressure-range'].hidden], [true, true, true]);
+  });
+
+  it('touches nothing when nothing changed', () => {
+    const { doc, el } = fakePage();
+    const view = createView(doc);
+    view.renderDayRange(day, 'mmhg');
+    const lines = [el['temperature-range'], el['humidity-range'], el['pressure-range']];
+    const before = lines.map((e) => e.writes);
+    view.renderDayRange({ ...day }, 'mmhg');
+    assert.deepEqual(lines.map((e) => e.writes), before);
   });
 });
 

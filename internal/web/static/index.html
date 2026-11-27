@@ -12,6 +12,10 @@
   <link rel="modulepreload" href="/model.js">
   <link rel="modulepreload" href="/format.js">
   <link rel="modulepreload" href="/view.js">
+  <link rel="modulepreload" href="/history.js">
+  <link rel="modulepreload" href="/chart.js">
+  <link rel="modulepreload" href="/chart-view.js">
+  <link rel="modulepreload" href="/loop.js">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
@@ -21,31 +25,78 @@
       <p class="role" id="role" hidden></p>
     </header>
 
-    <main class="board" id="board" data-dimmed="false">
-      <section class="hero" aria-labelledby="temperature-label">
-        <h2 class="label" id="temperature-label"><span class="key key-temperature" aria-hidden="true"></span>Temperature</h2>
-        <p class="hero-value"><span class="number" id="temperature">–</span><span class="unit">°C</span></p>
-        <p class="status" id="status" role="status" data-state="loading">
-          <span class="status-mark" aria-hidden="true"></span>
-          <span id="status-text">Connecting to the sensor…</span>
-        </p>
-      </section>
-
-      <div class="side">
-        <section class="tile" aria-labelledby="humidity-label">
-          <h2 class="label" id="humidity-label"><span class="key key-humidity" aria-hidden="true"></span>Humidity</h2>
-          <p class="value"><span class="number" id="humidity">–</span><span class="unit">%</span></p>
+    <main class="content">
+      <div class="board" id="board" data-dimmed="false" data-empty="false">
+        <section class="hero" aria-labelledby="temperature-label">
+          <h2 class="label" id="temperature-label"><span class="key key-temperature" aria-hidden="true"></span>Temperature</h2>
+          <p class="hero-value"><span class="number" id="temperature">–</span><span class="unit">°C</span></p>
+          <p class="status" id="status" role="status" data-state="loading">
+            <span class="status-mark" aria-hidden="true"></span>
+            <span id="status-text">Connecting to the sensor…</span>
+          </p>
+          <p class="subline" id="temperature-range" hidden></p>
         </section>
 
-        <section class="tile" aria-labelledby="pressure-label">
-          <h2 class="label" id="pressure-label"><span class="key key-pressure" aria-hidden="true"></span>Pressure</h2>
-          <p class="value"><span class="number" id="pressure">–</span><span class="unit" id="pressure-unit">mm Hg</span></p>
-          <div class="units" role="group" aria-label="Pressure unit">
-            <button type="button" class="unit-button" data-unit="mmhg" aria-pressed="true">mm Hg</button>
-            <button type="button" class="unit-button" data-unit="hpa" aria-pressed="false">hPa</button>
-          </div>
-        </section>
+        <div class="side">
+          <section class="tile" aria-labelledby="humidity-label">
+            <h2 class="label" id="humidity-label"><span class="key key-humidity" aria-hidden="true"></span>Humidity</h2>
+            <p class="value"><span class="number" id="humidity">–</span><span class="unit">%</span></p>
+            <p class="subline" id="humidity-range" hidden></p>
+          </section>
+
+          <section class="tile" aria-labelledby="pressure-label">
+            <h2 class="label" id="pressure-label"><span class="key key-pressure" aria-hidden="true"></span>Pressure</h2>
+            <p class="value"><span class="number" id="pressure">–</span><span class="unit" id="pressure-unit">mm Hg</span></p>
+            <p class="subline" id="pressure-range" hidden></p>
+            <div class="units" role="group" aria-label="Pressure unit">
+              <button type="button" class="unit-button" data-unit="mmhg" aria-pressed="true">mm Hg</button>
+              <button type="button" class="unit-button" data-unit="hpa" aria-pressed="false">hPa</button>
+            </div>
+          </section>
+        </div>
       </div>
+
+      <section class="history" aria-labelledby="history-title">
+        <div class="history-head">
+          <h2 class="section-title" id="history-title">History</h2>
+          <div class="ranges" role="group" aria-label="Time range">
+            <button type="button" class="range-button" data-range="6h" aria-pressed="false">6 h</button>
+            <button type="button" class="range-button" data-range="24h" aria-pressed="true">24 h</button>
+            <button type="button" class="range-button" data-range="7d" aria-pressed="false">7 d</button>
+            <button type="button" class="range-button" data-range="30d" aria-pressed="false">30 d</button>
+          </div>
+        </div>
+        <p class="history-status" id="history-status" role="status" data-state="loading" hidden></p>
+
+        <div class="charts" id="charts" data-dimmed="false">
+          <figure class="chart" data-metric="temperature">
+            <figcaption class="chart-head">
+              <span class="label"><span class="key key-temperature" aria-hidden="true"></span>Temperature</span>
+              <span class="readout" id="readout-temperature"></span>
+            </figcaption>
+            <svg class="plot" id="plot-temperature" role="img" tabindex="0" aria-label="Temperature"></svg>
+          </figure>
+          <figure class="chart" data-metric="humidity">
+            <figcaption class="chart-head">
+              <span class="label"><span class="key key-humidity" aria-hidden="true"></span>Humidity</span>
+              <span class="readout" id="readout-humidity"></span>
+            </figcaption>
+            <svg class="plot" id="plot-humidity" role="img" tabindex="0" aria-label="Humidity"></svg>
+          </figure>
+          <figure class="chart" data-metric="pressure">
+            <figcaption class="chart-head">
+              <span class="label"><span class="key key-pressure" aria-hidden="true"></span>Pressure</span>
+              <span class="readout" id="readout-pressure"></span>
+            </figcaption>
+            <svg class="plot" id="plot-pressure" role="img" tabindex="0" aria-label="Pressure"></svg>
+          </figure>
+        </div>
+
+        <details class="table-view" id="table-view">
+          <summary>Show the data as a table</summary>
+          <div class="table-holder" id="table-holder"></div>
+        </details>
+      </section>
     </main>
 
     <noscript>

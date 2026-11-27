@@ -1,90 +1,161 @@
-// Entry point: polls the latest reading, keeps the page up to date and remembers the pressure unit.
+// Entry point: keeps the board and the history up to date and remembers the pressure unit and the range.
 
-import { getLatest, getMe } from './api.js';
+import { getLatest, getMe, getReadings, getStats } from './api.js';
+import { createHistoryView } from './chart-view.js';
 import { DEFAULT_PRESSURE_UNIT, isPressureUnit } from './format.js';
+import {
+  RANGES,
+  DEFAULT_RANGE,
+  describeHistory,
+  historyDelay,
+  initialHistory,
+  isRange,
+  onHistory,
+  onHistoryFailure,
+  pickRange,
+  statsDelay,
+} from './history.js';
+import { createLoop } from './loop.js';
 import { describe, initialState, nextDelay, onFailure, onLatest } from './model.js';
 import { createView } from './view.js';
 
 const UNIT_KEY = 'climate.pressureUnit';
-const MIN_GAP_MS = 5000; // a tab that comes back to the front does not ask again within this time
+const RANGE_KEY = 'climate.range';
+const MIN_GAP_MS = 5000; // a tab that comes back to the front does not ask for the latest reading again within this time
+const DAY_RANGE = '24h'; // the range of the numbers under the board
 
 // The storage can be missing or throw (private windows, blocked site data): the page works without it.
-function loadUnit() {
+function load(key, accepts, fallback) {
   try {
-    const stored = localStorage.getItem(UNIT_KEY);
-    return isPressureUnit(stored) ? stored : DEFAULT_PRESSURE_UNIT;
+    const stored = localStorage.getItem(key);
+    return accepts(stored) ? stored : fallback;
   } catch {
-    return DEFAULT_PRESSURE_UNIT;
+    return fallback;
   }
 }
 
-function saveUnit(unit) {
+function save(key, value) {
   try {
-    localStorage.setItem(UNIT_KEY, unit);
+    localStorage.setItem(key, value);
   } catch {
     // The choice then lasts until the page is closed.
   }
 }
 
 const view = createView(document);
+const historyView = createHistoryView(document);
+let unit = load(UNIT_KEY, isPressureUnit, DEFAULT_PRESSURE_UNIT);
 let state = initialState;
-let unit = loadUnit();
+let history = { ...initialHistory, range: load(RANGE_KEY, isRange, DEFAULT_RANGE) };
+let dayStats = null;
 let failures = 0;
-let delay = 0;
-let lastAttempt = -Infinity;
-let timer = 0;
-let busy = false;
+let historyRequest = null; // the AbortController of the request for the history that is under way
 
 const visible = () => document.visibilityState === 'visible';
-const render = () => view.render(describe(state, performance.now()), unit);
 
-function schedule(ms) {
-  clearTimeout(timer);
-  if (visible()) timer = setTimeout(poll, ms);
+function renderBoard() {
+  view.render(describe(state, performance.now()), unit);
+  view.renderDayRange(dayStats, unit);
 }
 
-async function poll() {
-  if (busy) return;
-  busy = true;
-  clearTimeout(timer);
-  lastAttempt = performance.now();
-  let failure = null;
-  try {
-    state = onLatest(state, await getLatest(), performance.now());
-    failures = 0;
-  } catch (err) {
-    failure = err;
-    failures += 1;
-    state = onFailure(state, err, performance.now());
-  } finally {
-    busy = false;
-  }
-  delay = nextDelay(failure, failures);
-  render();
-  schedule(delay);
+function renderHistory() {
+  const description = describeHistory(history, performance.now());
+  historyView.render(description, history.range, unit);
+  historyView.renderStatus(description);
 }
+
+// The latest reading: every 15 seconds, and later when the server is struggling.
+const latestLoop = createLoop(
+  async () => {
+    let failure = null;
+    try {
+      state = onLatest(state, await getLatest(), performance.now());
+      failures = 0;
+    } catch (err) {
+      failure = err;
+      failures += 1;
+      state = onFailure(state, err, performance.now());
+    }
+    renderBoard();
+    return nextDelay(failure, failures);
+  },
+  { visible, staleAfterMs: MIN_GAP_MS },
+);
+
+// The history of the picked range. A request whose range is no longer the picked one is given up.
+const historyLoop = createLoop(
+  async () => {
+    historyRequest?.abort();
+    const controller = new AbortController();
+    historyRequest = controller;
+    const range = history.range;
+    let failure = null;
+    try {
+      history = onHistory(history, range, await getReadings(range, { signal: controller.signal }));
+    } catch (err) {
+      if (controller !== historyRequest) return 0; // given up on purpose, the next round is already under way
+      failure = err;
+      history = onHistoryFailure(history, range, err, performance.now());
+    }
+    if (controller !== historyRequest) return 0;
+    historyRequest = null;
+    renderHistory();
+    return historyDelay(range, failure);
+  },
+  { visible, staleAfterMs: () => RANGES[history.range].refreshMs },
+);
+
+// The lowest and the highest value of the last day, under the numbers of the board. They are an extra: when they
+// cannot be loaded the board simply has no second line.
+const statsLoop = createLoop(
+  async () => {
+    try {
+      dayStats = await getStats(DAY_RANGE);
+      renderBoard();
+      return statsDelay(null);
+    } catch (err) {
+      return statsDelay(err);
+    }
+  },
+  { visible, staleAfterMs: statsDelay(null) },
+);
+
+const loops = [latestLoop, historyLoop, statsLoop];
 
 view.onUnitPicked((picked) => {
   if (!isPressureUnit(picked) || picked === unit) return;
   unit = picked;
-  saveUnit(unit);
-  render();
+  save(UNIT_KEY, unit);
+  renderBoard();
+  renderHistory();
 });
+
+historyView.onRangePicked((picked) => {
+  if (!isRange(picked) || picked === history.range) return;
+  history = pickRange(history, picked);
+  save(RANGE_KEY, picked);
+  renderHistory();
+  historyLoop.restart();
+});
+
+historyView.onResize(renderHistory);
 
 // A hidden tab asks for nothing: the dashboard is not being read, and every request costs the server something.
 document.addEventListener('visibilitychange', () => {
   if (!visible()) {
-    clearTimeout(timer);
+    for (const loop of loops) loop.pause();
     return;
   }
-  render();
-  if (performance.now() - lastAttempt >= MIN_GAP_MS) poll();
-  else schedule(delay);
+  renderBoard();
+  renderHistory();
+  for (const loop of loops) loop.resume();
 });
 
-// The age of the reading grows by the second, so the sentence about it is refreshed by the second.
+// The age of the reading grows by the second, so the sentences about it are refreshed by the second.
 setInterval(() => {
-  if (visible()) render();
+  if (!visible()) return;
+  renderBoard();
+  historyView.renderStatus(describeHistory(history, performance.now()));
 }, 1000);
 
 // Who is looking: the role is shown in the corner. Not knowing it is no reason to fail.
@@ -92,5 +163,6 @@ getMe()
   .then((me) => view.showRole(me))
   .catch(() => {});
 
-render();
-poll();
+renderBoard();
+renderHistory();
+for (const loop of loops) loop.start();
